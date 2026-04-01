@@ -1,18 +1,14 @@
 pub mod ansi_convert;
 pub mod api;
-#[cfg(feature = "kairos")]
 pub mod assistant;
 pub mod auth;
 pub mod bootstrap;
-#[cfg(feature = "bridge")]
 pub mod bridge;
-#[cfg(feature = "buddy")]
 pub mod buddy;
 pub mod commands;
 pub mod compact;
 pub mod config;
 pub mod context;
-#[cfg(feature = "coordinator")]
 pub mod coordinator;
 pub mod cost_tracker;
 pub mod deep_link;
@@ -37,6 +33,5 @@ pub mod teleport;
 pub mod types;
 pub mod upstream_proxy;
 pub mod utils;
-#[cfg(feature = "voice")]
 pub mod voice;
 pub mod worktree;

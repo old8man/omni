@@ -315,105 +315,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "claude-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "claude-core",
- "claude-tools",
- "claude-tui",
- "hostname",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "claude-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "dirs",
- "futures-util",
- "glob",
- "hex",
- "lazy-regex",
- "libc",
- "notify",
- "notify-debouncer-mini",
- "once_cell",
- "rand",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "uuid",
- "which",
-]
-
-[[package]]
-name = "claude-tools"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "claude-core",
- "dirs",
- "glob",
- "libc",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "claude-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "chrono",
- "claude-core",
- "claude-tools",
- "copypasta",
- "crossterm",
- "htmlescape",
- "ratatui",
- "serde",
- "serde_json",
- "syntect",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1909,6 +1810,105 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-metal",
+]
+
+[[package]]
+name = "omni-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "hostname",
+ "omni-core",
+ "omni-tools",
+ "omni-tui",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "omni-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "dirs",
+ "futures-util",
+ "glob",
+ "hex",
+ "lazy-regex",
+ "libc",
+ "notify",
+ "notify-debouncer-mini",
+ "once_cell",
+ "rand",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "which",
+]
+
+[[package]]
+name = "omni-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "chrono",
+ "dirs",
+ "glob",
+ "libc",
+ "omni-core",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "omni-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "copypasta",
+ "crossterm",
+ "htmlescape",
+ "omni-core",
+ "omni-tools",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "syntect",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

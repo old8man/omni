@@ -177,30 +177,20 @@ pub fn is_feature_enabled(flag: FeatureFlag) -> bool {
 // Compile-time feature helpers
 // ---------------------------------------------------------------------------
 
-/// Check whether the `coordinator` Cargo feature is compiled in.
-pub fn is_coordinator_compiled() -> bool {
-    cfg!(feature = "coordinator")
-}
+/// Check whether the `coordinator` module is available (always true).
+pub fn is_coordinator_compiled() -> bool { true }
 
-/// Check whether the `bridge` Cargo feature is compiled in.
-pub fn is_bridge_compiled() -> bool {
-    cfg!(feature = "bridge")
-}
+/// Check whether the `bridge` module is available (always true).
+pub fn is_bridge_compiled() -> bool { true }
 
-/// Check whether the `voice` Cargo feature is compiled in.
-pub fn is_voice_compiled() -> bool {
-    cfg!(feature = "voice")
-}
+/// Check whether the `voice` module is available (always true).
+pub fn is_voice_compiled() -> bool { true }
 
-/// Check whether the `kairos` Cargo feature is compiled in.
-pub fn is_kairos_compiled() -> bool {
-    cfg!(feature = "kairos")
-}
+/// Check whether the `assistant` (kairos) module is available (always true).
+pub fn is_kairos_compiled() -> bool { true }
 
-/// Check whether the `buddy` Cargo feature is compiled in.
-pub fn is_buddy_compiled() -> bool {
-    cfg!(feature = "buddy")
-}
+/// Check whether the `buddy` module is available (always true).
+pub fn is_buddy_compiled() -> bool { true }
 
 // ---------------------------------------------------------------------------
 // FeatureGates

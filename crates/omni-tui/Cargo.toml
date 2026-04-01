@@ -23,14 +23,6 @@ htmlescape = "0.3"
 copypasta = { version = "0.10", default-features = false, features = ["wayland", "x11"] }
 tempfile = "3"
 
-[features]
-default = ["omni-core/default"]
-bridge = ["omni-core/bridge"]
-voice = ["omni-core/voice"]
-coordinator = ["omni-core/coordinator"]
-buddy = ["omni-core/buddy"]
-kairos = ["omni-core/kairos"]
-computer-use = ["omni-core/computer-use"]
 
 [dev-dependencies]
 tempfile = "3"

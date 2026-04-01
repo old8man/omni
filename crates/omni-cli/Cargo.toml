@@ -22,11 +22,3 @@ uuid.workspace = true
 hostname = "0.4"
 chrono.workspace = true
 
-[features]
-default = ["omni-core/default", "omni-tools/default", "omni-tui/default"]
-bridge = ["omni-core/bridge", "omni-tools/bridge", "omni-tui/bridge"]
-voice = ["omni-core/voice", "omni-tools/voice", "omni-tui/voice"]
-coordinator = ["omni-core/coordinator", "omni-tools/coordinator", "omni-tui/coordinator"]
-buddy = ["omni-core/buddy", "omni-tools/buddy", "omni-tui/buddy"]
-kairos = ["omni-core/kairos", "omni-tools/kairos", "omni-tui/kairos"]
-computer-use = ["omni-core/computer-use", "omni-tools/computer-use", "omni-tui/computer-use"]

@@ -134,79 +134,66 @@ async fn main() -> Result<()> {
             spawn_mode,
             session_id,
         }) => {
-            #[cfg(feature = "bridge")]
-            {
-                use omni_core::bridge::types::{BridgeConfig, SpawnMode};
+            use omni_core::bridge::types::{BridgeConfig, SpawnMode};
 
-                let cwd = cli
-                    .working_dir
-                    .clone()
-                    .map(Ok)
-                    .unwrap_or_else(std::env::current_dir)?;
-                let mode = match spawn_mode.as_str() {
-                    "worktree" => SpawnMode::Worktree,
-                    "same-dir" => SpawnMode::SameDir,
-                    _ => SpawnMode::SingleSession,
-                };
+            let cwd = cli
+                .working_dir
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(std::env::current_dir)?;
+            let mode = match spawn_mode.as_str() {
+                "worktree" => SpawnMode::Worktree,
+                "same-dir" => SpawnMode::SameDir,
+                _ => SpawnMode::SingleSession,
+            };
 
-                // Detect git info
-                let branch = std::process::Command::new("git")
-                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .unwrap_or_default();
+            let branch = std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
 
-                let git_repo_url = std::process::Command::new("git")
-                    .args(["remote", "get-url", "origin"])
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            let git_repo_url = std::process::Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
-                let hostname = hostname::get()
-                    .map(|h| h.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "unknown".to_string());
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
 
-                let config = BridgeConfig {
-                    dir: cwd.to_string_lossy().to_string(),
-                    machine_name: hostname,
-                    branch,
-                    git_repo_url,
-                    max_sessions: *max_sessions,
-                    spawn_mode: mode,
-                    verbose: cli.verbose,
-                    sandbox: false,
-                    bridge_id: uuid::Uuid::new_v4().to_string(),
-                    worker_type: "claude_code".to_string(),
-                    environment_id: uuid::Uuid::new_v4().to_string(),
-                    reuse_environment_id: None,
-                    api_base_url: "https://api.anthropic.com".to_string(),
-                    session_ingress_url: "https://api.anthropic.com".to_string(),
-                    debug_file: None,
-                    session_timeout_ms: None,
-                };
+            let config = BridgeConfig {
+                dir: cwd.to_string_lossy().to_string(),
+                machine_name: hostname,
+                branch,
+                git_repo_url,
+                max_sessions: *max_sessions,
+                spawn_mode: mode,
+                verbose: cli.verbose,
+                sandbox: false,
+                bridge_id: uuid::Uuid::new_v4().to_string(),
+                worker_type: "claude_code".to_string(),
+                environment_id: uuid::Uuid::new_v4().to_string(),
+                reuse_environment_id: None,
+                api_base_url: "https://api.anthropic.com".to_string(),
+                session_ingress_url: "https://api.anthropic.com".to_string(),
+                debug_file: None,
+                session_timeout_ms: None,
+            };
 
-                eprintln!("Remote Control bridge mode");
-                eprintln!("  Directory: {}", config.dir);
-                eprintln!("  Branch: {}", config.branch);
-                eprintln!("  Max sessions: {}", config.max_sessions);
-                eprintln!("  Spawn mode: {:?}", config.spawn_mode);
-                if let Some(sid) = session_id {
-                    eprintln!("  Resuming session: {sid}");
-                }
-
-                eprintln!(
-                    "\nBridge configured. Use `claude login` first, then connect via claude.ai/code."
-                );
+            eprintln!("Remote Control bridge mode");
+            eprintln!("  Directory: {}", config.dir);
+            eprintln!("  Branch: {}", config.branch);
+            eprintln!("  Max sessions: {}", config.max_sessions);
+            eprintln!("  Spawn mode: {:?}", config.spawn_mode);
+            if let Some(sid) = session_id {
+                eprintln!("  Resuming session: {sid}");
             }
-
-            #[cfg(not(feature = "bridge"))]
-            {
-                let _ = (max_sessions, spawn_mode, session_id);
-                eprintln!("Bridge mode is not compiled in. Rebuild with `--features bridge`.");
-            }
+            eprintln!("\nBridge configured. Use `omni login` first, then connect via claude.ai/code.");
 
             return Ok(());
         }
@@ -298,8 +285,7 @@ async fn main() -> Result<()> {
     // Initialize LSP manager (servers are lazily started when configs are provided)
     let lsp_manager = omni_core::services::LspManager::new();
 
-    // Activate assistant mode if enabled (requires kairos feature)
-    #[cfg(feature = "kairos")]
+    // Activate assistant mode if enabled
     let assistant_state = {
         let mut state = omni_core::assistant::AssistantState::default();
         if state_store.is_assistant_mode() {
@@ -334,10 +320,8 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // Append assistant-mode addendum if active (requires kairos feature)
-    #[allow(unused_mut)]
+    // Append assistant-mode addendum if active
     let mut system_prompt_values = system_prompt_values;
-    #[cfg(feature = "kairos")]
     if assistant_state.is_active() {
         let addendum = omni_core::assistant::get_assistant_system_prompt_addendum();
         system_prompt_values.push(serde_json::json!({"type": "text", "text": addendum}));
