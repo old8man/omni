@@ -6,11 +6,13 @@ use std::env;
 // Model string constants
 // ---------------------------------------------------------------------------
 
-pub const OPUS_46: &str = "claude-opus-4-6-20260401";
+// Model IDs match the original Claude Code `configs.ts` firstParty strings.
+// The API accepts these short-form IDs without date suffixes.
+pub const OPUS_46: &str = "claude-opus-4-6";
 pub const OPUS_45: &str = "claude-opus-4-5-20250514";
 pub const OPUS_41: &str = "claude-opus-4-1-20250805";
 pub const OPUS_40: &str = "claude-opus-4-20250514";
-pub const SONNET_46: &str = "claude-sonnet-4-6-20260401";
+pub const SONNET_46: &str = "claude-sonnet-4-6";
 pub const SONNET_45: &str = "claude-sonnet-4-5-20250514";
 pub const SONNET_40: &str = "claude-sonnet-4-20250514";
 pub const SONNET_37: &str = "claude-3-7-sonnet-20250219";
