@@ -243,7 +243,7 @@ impl ApiClient {
             .header("anthropic-beta", self.build_beta_header())
             // Required headers matching the original Claude Code client
             .header("x-app", "cli")
-            .header("User-Agent", format!("claude-cli/1.0.0 (external, cli)"))
+            .header("User-Agent", "claude-cli/2.1.89 (external, cli)")
             .header("X-Claude-Code-Session-Id", &session_id);
 
         // Prompt-cache control: set breakpoint TTL when configured.
