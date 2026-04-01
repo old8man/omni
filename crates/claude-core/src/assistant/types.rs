@@ -24,7 +24,7 @@ impl Default for AssistantConfig {
     fn default() -> Self {
         let daily_log_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claude")
+            .join(crate::config::paths::OMNI_DIR_NAME)
             .join("assistant")
             .join("logs");
         Self {

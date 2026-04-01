@@ -4,7 +4,7 @@ use claude_core::config::settings::*;
 #[test]
 fn test_claude_dir() {
     let dir = claude_dir().unwrap();
-    assert!(dir.ends_with(".claude"));
+    assert!(dir.ends_with(".claude-omni"));
 }
 
 #[test]

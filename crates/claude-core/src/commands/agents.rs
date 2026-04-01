@@ -28,9 +28,9 @@ impl Command for AgentsCommand {
 
         match parts.first().copied().unwrap_or("list") {
             "list" | "" => {
-                let config_dir = dirs::config_dir()
-                    .map(|d| d.join("claude").join("agents"))
-                    .unwrap_or_else(|| ctx.cwd.join(".claude").join("agents"));
+                let config_dir = crate::config::paths::claude_dir()
+                    .map(|d| d.join("agents"))
+                    .unwrap_or_else(|_| ctx.cwd.join(crate::config::paths::PROJECT_DIR_NAME).join("agents"));
 
                 let mut output = String::from("Agent Configurations\n");
                 output.push_str("════════════════════\n\n");
@@ -89,7 +89,7 @@ impl Command for AgentsCommand {
 
                 // Also check project-local agents directory
                 if let Some(ref project_root) = ctx.project_root {
-                    let local_dir = project_root.join(".claude").join("agents");
+                    let local_dir = project_root.join(crate::config::paths::PROJECT_DIR_NAME).join("agents");
                     if local_dir.is_dir() {
                         if let Ok(entries) = std::fs::read_dir(&local_dir) {
                             let local_agents: Vec<String> = entries

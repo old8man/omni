@@ -47,7 +47,7 @@ pub fn create_worktree(
 ) -> Result<WorktreeInfo> {
     validate_worktree_slug(branch_name)?;
     let worktree_dir = repo_root
-        .join(".claude")
+        .join(crate::config::paths::PROJECT_DIR_NAME)
         .join("worktrees")
         .join(branch_name);
     if worktree_dir.exists() {
@@ -133,7 +133,7 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<WorktreeInfo>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let claude_dir = repo_root.join(".claude").join("worktrees");
+    let claude_dir = repo_root.join(crate::config::paths::PROJECT_DIR_NAME).join("worktrees");
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;
     let mut current_branch = String::new();

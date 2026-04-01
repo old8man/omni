@@ -21,8 +21,8 @@ impl Command for ReloadPluginsCommand {
 
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
         // Scan plugin directories for installed plugins
-        let plugin_dir = dirs::config_dir()
-            .map(|d| d.join("claude").join("plugins"));
+        let plugin_dir = crate::config::paths::claude_dir()
+            .map(|d| d.join("plugins")).ok();
 
         let mut plugin_count: usize = 0;
         let mut command_count: usize = 0;

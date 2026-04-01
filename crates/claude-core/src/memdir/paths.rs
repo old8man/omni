@@ -4,7 +4,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-const CLAUDE_CONFIG_DIR: &str = ".claude";
+const CLAUDE_CONFIG_DIR: &str = ".claude-omni";
 const PROJECTS_DIR: &str = "projects";
 const MEMORY_DIR: &str = "memory";
 const ENTRYPOINT_NAME: &str = "MEMORY.md";

@@ -29,8 +29,8 @@ impl Command for RemoteEnvCommand {
         match arg.as_str() {
             "" | "show" => {
                 // Read current configuration
-                let config_path = dirs::config_dir()
-                    .map(|d| d.join("claude").join("remote-env.json"));
+                let config_path = crate::config::paths::claude_dir()
+                    .map(|d| d.join("remote-env.json")).ok();
 
                 let current_env = if let Some(ref path) = config_path {
                     match std::fs::read_to_string(path) {
@@ -73,8 +73,8 @@ impl Command for RemoteEnvCommand {
                 CommandResult::Output(output)
             }
             "clear" | "reset" => {
-                let config_path = dirs::config_dir()
-                    .map(|d| d.join("claude").join("remote-env.json"));
+                let config_path = crate::config::paths::claude_dir()
+                    .map(|d| d.join("remote-env.json")).ok();
 
                 if let Some(path) = config_path {
                     match std::fs::remove_file(&path) {
@@ -105,8 +105,8 @@ impl Command for RemoteEnvCommand {
                     );
                 }
 
-                let config_path = dirs::config_dir()
-                    .map(|d| d.join("claude").join("remote-env.json"));
+                let config_path = crate::config::paths::claude_dir()
+                    .map(|d| d.join("remote-env.json")).ok();
 
                 if let Some(path) = config_path {
                     let config_dir = path.parent().unwrap();

@@ -390,18 +390,18 @@ impl SessionManager {
 
     /// Compute the project-scoped session directory for a given working directory.
     ///
-    /// Path: `~/.claude/projects/{sanitized_cwd}`
+    /// Path: `~/.claude-omni/projects/{sanitized_cwd}`
     pub fn project_dir_for_cwd(cwd: &str) -> PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let sanitized = sanitize_path(cwd);
-        home.join(".claude").join("projects").join(sanitized)
+        home.join(crate::config::paths::OMNI_DIR_NAME).join("projects").join(sanitized)
     }
 
-    /// Default sessions directory (legacy): `~/.claude/sessions`.
+    /// Default sessions directory (legacy): `~/.claude-omni/sessions`.
     pub fn default_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claude")
+            .join(crate::config::paths::OMNI_DIR_NAME)
             .join("sessions")
     }
 
@@ -1114,11 +1114,11 @@ impl SessionManager {
 
     /// List all sessions across all project directories.
     ///
-    /// Scans all project directories under `~/.claude/projects/` and returns
+    /// Scans all project directories under `~/.claude-omni/projects/` and returns
     /// summaries for all sessions found.
     pub fn list_all_sessions() -> Result<Vec<SessionSummary>> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let projects_dir = home.join(".claude").join("projects");
+        let projects_dir = home.join(crate::config::paths::OMNI_DIR_NAME).join("projects");
         if !projects_dir.exists() {
             return Ok(Vec::new());
         }
@@ -1277,11 +1277,11 @@ pub struct HistoryEntry {
     pub model: Option<String>,
 }
 
-/// Default history file path: `~/.claude/history.jsonl`.
+/// Default history file path: `~/.claude-omni/history.jsonl`.
 fn history_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
+        .join(crate::config::paths::OMNI_DIR_NAME)
         .join("history.jsonl")
 }
 
@@ -1586,7 +1586,7 @@ mod tests {
     fn test_project_dir_for_cwd() {
         let dir = SessionManager::project_dir_for_cwd("/Users/test/project");
         let dir_str = dir.to_string_lossy();
-        assert!(dir_str.contains(".claude/projects/"));
+        assert!(dir_str.contains(".claude-omni/projects/"));
         assert!(dir_str.contains("Users-test-project"));
     }
 

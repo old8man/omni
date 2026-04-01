@@ -93,12 +93,12 @@ impl Command for DoctorCommand {
         // Config directory
         lines.push(String::new());
         lines.push("Configuration:".to_string());
-        let config_dir = dirs::config_dir().map(|d| d.join("claude"));
+        let config_dir = crate::config::paths::claude_dir().ok();
         let config_ok = config_dir.as_ref().map(|d| d.exists()).unwrap_or(false);
         lines.push(if config_ok {
             format!("  [ok] Config directory: {}", config_dir.unwrap().display())
         } else {
-            "  [!!] Config directory not found (~/.config/claude)".to_string()
+            "  [!!] Config directory not found (~/.claude-omni)".to_string()
         });
 
         // Auth check

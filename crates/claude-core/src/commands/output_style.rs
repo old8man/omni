@@ -50,7 +50,7 @@ impl Command for OutputStyleCommand {
         }
 
         if let Some((name, desc)) = VALID_STYLES.iter().find(|(n, _)| *n == style.as_str()) {
-            let config_dir = dirs::config_dir().map(|d| d.join("claude"));
+            let config_dir = crate::config::paths::claude_dir().ok();
 
             if let Some(dir) = config_dir {
                 let _ = std::fs::create_dir_all(&dir);

@@ -29,7 +29,7 @@ static CACHED_TOKEN: Mutex<Option<Option<String>>> = Mutex::new(None);
 
 /// Get the path to the trusted device token file.
 fn token_file_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".claude").join(TOKEN_FILE_NAME))
+    dirs::home_dir().map(|home| home.join(crate::config::paths::OMNI_DIR_NAME).join(TOKEN_FILE_NAME))
 }
 
 /// Read the stored trusted device token from disk.

@@ -16,19 +16,19 @@ impl Command for InitCommand {
     }
 
     async fn execute(&self, _args: &str, ctx: &CommandContext) -> CommandResult {
-        let claude_dir = ctx.cwd.join(".claude");
+        let claude_dir = ctx.cwd.join(crate::config::paths::PROJECT_DIR_NAME);
         let claude_md = ctx.cwd.join("CLAUDE.md");
 
         let mut lines = vec!["Project initialization:".to_string()];
 
         if claude_dir.exists() {
             lines.push(format!(
-                "  [ok] .claude/ directory exists: {}",
+                "  [ok] .claude-omni/ directory exists: {}",
                 claude_dir.display()
             ));
         } else {
             lines.push(
-                "  [!!] .claude/ directory not found — create it to store project settings"
+                "  [!!] .claude-omni/ directory not found — create it to store project settings"
                     .to_string(),
             );
         }

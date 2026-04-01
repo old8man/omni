@@ -31,9 +31,9 @@ fn check_prerequisite(name: &str) -> SetupCheck {
 }
 
 fn ensure_config_dir() -> SetupCheck {
-    let dir = match dirs::config_dir() {
-        Some(d) => d.join("claude"),
-        None => {
+    let dir = match crate::config::paths::claude_dir() {
+        Ok(d) => d,
+        Err(_) => {
             return SetupCheck {
                 label: "Config directory".to_string(),
                 ok: false,
@@ -67,10 +67,10 @@ fn ensure_config_dir() -> SetupCheck {
 fn ensure_project_config(cwd: &std::path::Path) -> Vec<SetupCheck> {
     let mut checks = Vec::new();
 
-    let claude_dir = cwd.join(".claude");
+    let claude_dir = cwd.join(crate::config::paths::PROJECT_DIR_NAME);
     if claude_dir.exists() {
         checks.push(SetupCheck {
-            label: ".claude/ directory".to_string(),
+            label: ".claude-omni/ directory".to_string(),
             ok: true,
             detail: "exists".to_string(),
         });
@@ -78,14 +78,14 @@ fn ensure_project_config(cwd: &std::path::Path) -> Vec<SetupCheck> {
         match std::fs::create_dir_all(&claude_dir) {
             Ok(()) => {
                 checks.push(SetupCheck {
-                    label: ".claude/ directory".to_string(),
+                    label: ".claude-omni/ directory".to_string(),
                     ok: true,
                     detail: "created".to_string(),
                 });
             }
             Err(e) => {
                 checks.push(SetupCheck {
-                    label: ".claude/ directory".to_string(),
+                    label: ".claude-omni/ directory".to_string(),
                     ok: false,
                     detail: format!("failed to create: {}", e),
                 });
@@ -127,8 +127,8 @@ fn ensure_project_config(cwd: &std::path::Path) -> Vec<SetupCheck> {
 
 fn check_auth() -> SetupCheck {
     let has_env_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
-    let has_stored_key = dirs::config_dir()
-        .map(|d| d.join("claude").join("credentials.json").exists())
+    let has_stored_key = crate::config::paths::claude_dir()
+        .map(|d| d.join("credentials.json").exists())
         .unwrap_or(false);
 
     if has_env_key {

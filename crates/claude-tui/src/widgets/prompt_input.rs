@@ -285,9 +285,9 @@ pub struct PromptInput {
     pub history_search: HistorySearchState,
 }
 
-/// Return the path to the history file: `~/.claude/history.jsonl`
+/// Return the path to the history file: `~/.claude-omni/history.jsonl`
 fn history_file_path() -> Option<std::path::PathBuf> {
-    dirs_home().map(|h| std::path::PathBuf::from(h).join(".claude").join("history.jsonl"))
+    dirs_home().map(|h| std::path::PathBuf::from(h).join(".claude-omni").join("history.jsonl"))
 }
 
 /// Load history from `~/.claude/history.jsonl` (one JSON object per line).

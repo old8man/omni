@@ -268,11 +268,11 @@ fn load_style_from_file(path: &Path) -> Result<OutputStyle> {
     // if inside .claude in a project use ProjectSettings.
     let source = if path
         .to_string_lossy()
-        .contains(".claude/output-styles")
+        .contains(".claude-omni/output-styles")
     {
         // Check if it's in the home directory
         if let Some(home) = dirs::home_dir() {
-            if path.starts_with(home.join(".claude")) {
+            if path.starts_with(home.join(crate::config::paths::OMNI_DIR_NAME)) {
                 StyleSource::UserSettings
             } else {
                 StyleSource::ProjectSettings
@@ -350,10 +350,10 @@ impl OutputStyleRegistry {
         }
     }
 
-    /// Load user styles from `~/.claude/output-styles/`.
+    /// Load user styles from `~/.claude-omni/output-styles/`.
     pub fn load_user_styles(&mut self) -> Result<usize> {
         let dir = match dirs::home_dir() {
-            Some(home) => home.join(".claude").join("output-styles"),
+            Some(home) => home.join(crate::config::paths::OMNI_DIR_NAME).join("output-styles"),
             None => return Ok(0),
         };
         let styles = load_styles_from_directory(&dir)?;
@@ -364,9 +364,9 @@ impl OutputStyleRegistry {
         Ok(count)
     }
 
-    /// Load project-local styles from `<cwd>/.claude/output-styles/`.
+    /// Load project-local styles from `<cwd>/.claude-omni/output-styles/`.
     pub fn load_project_styles(&mut self, cwd: &Path) -> Result<usize> {
-        let dir = cwd.join(".claude").join("output-styles");
+        let dir = cwd.join(crate::config::paths::PROJECT_DIR_NAME).join("output-styles");
         let styles = load_styles_from_directory(&dir)?;
         let count = styles.len();
         for mut style in styles {

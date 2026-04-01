@@ -59,9 +59,9 @@ impl Command for LogoutCommand {
     }
 
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
-        let config_dir = match dirs::config_dir() {
-            Some(d) => d.join("claude"),
-            None => {
+        let config_dir = match crate::config::paths::claude_dir() {
+            Ok(d) => d,
+            Err(_) => {
                 return CommandResult::Output(
                     "Could not determine config directory. \
                      If you set ANTHROPIC_API_KEY as an environment variable, \

@@ -19,14 +19,14 @@ impl Command for HooksCommand {
         let mut lines = vec!["Hooks configuration:".to_string()];
 
         // Check project settings
-        let project_settings = ctx.cwd.join(".claude").join("settings.json");
+        let project_settings = ctx.cwd.join(crate::config::paths::PROJECT_DIR_NAME).join("settings.json");
         if project_settings.exists() {
             lines.push(format!("  Project: {}", project_settings.display()));
         }
 
         // Check user settings
         if let Some(home) = dirs::home_dir() {
-            let user_settings = home.join(".claude").join("settings.json");
+            let user_settings = home.join(crate::config::paths::OMNI_DIR_NAME).join("settings.json");
             if user_settings.exists() {
                 lines.push(format!("  User:    {}", user_settings.display()));
             }

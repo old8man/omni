@@ -23,8 +23,8 @@ impl Command for ReleaseNotesCommand {
 
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
         // Try to read a locally cached changelog
-        let changelog_path = dirs::config_dir()
-            .map(|d| d.join("claude").join("changelog.md"));
+        let changelog_path = crate::config::paths::claude_dir()
+            .map(|d| d.join("changelog.md")).ok();
 
         if let Some(path) = changelog_path {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {

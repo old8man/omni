@@ -477,9 +477,8 @@ impl Default for ExtractMemoriesState {
 
 /// Default auto-memory directory, relative to the project config.
 pub fn default_auto_mem_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claude")
+    crate::config::paths::claude_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
         .join("memory")
 }
 

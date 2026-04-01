@@ -102,7 +102,7 @@ impl Command for StatuslineCommand {
             set_terminal_title("");
             set_tmux_status("");
 
-            let config_dir = dirs::config_dir().map(|d| d.join("claude"));
+            let config_dir = crate::config::paths::claude_dir().ok();
             if let Some(dir) = config_dir {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = std::fs::write(dir.join("statusline_preset"), "off");
@@ -116,7 +116,7 @@ impl Command for StatuslineCommand {
             set_terminal_title(&content);
             set_tmux_status(&content);
 
-            let config_dir = dirs::config_dir().map(|d| d.join("claude"));
+            let config_dir = crate::config::paths::claude_dir().ok();
             if let Some(dir) = config_dir {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = std::fs::write(dir.join("statusline_preset"), preset);

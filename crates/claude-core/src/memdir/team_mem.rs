@@ -375,7 +375,7 @@ pub async fn scan_project_memory_files(project_root: &Path) -> HashMap<String, S
     }
 
     // Check for .claude/ directory
-    let claude_dir = project_root.join(".claude");
+    let claude_dir = project_root.join(crate::config::paths::PROJECT_DIR_NAME);
     if claude_dir.is_dir() {
         // Scan for .md files in .claude/
         if let Ok(mut entries) = fs::read_dir(&claude_dir).await {
@@ -532,8 +532,8 @@ mod tests {
         // Create CLAUDE.md
         tokio::fs::write(tmp.path().join("CLAUDE.md"), "# Project Rules").await.unwrap();
 
-        // Create .claude/ directory with a file
-        let claude_dir = tmp.path().join(".claude");
+        // Create .claude-omni/ directory with a file
+        let claude_dir = tmp.path().join(crate::config::paths::PROJECT_DIR_NAME);
         tokio::fs::create_dir(&claude_dir).await.unwrap();
         tokio::fs::write(claude_dir.join("settings.md"), "# Settings").await.unwrap();
 

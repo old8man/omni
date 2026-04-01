@@ -111,7 +111,7 @@ impl ToolExecutor for ExitPlanModeTool {
         let is_agent = ctx.agent_name.is_some();
 
         // Read the plan from the standard location
-        let plan_dir = ctx.working_directory.join(".claude").join("plans");
+        let plan_dir = ctx.working_directory.join(".claude-omni").join("plans");
         let plan_file = plan_dir.join("plan.md");
 
         let plan = if plan_file.exists() {

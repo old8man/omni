@@ -8,15 +8,15 @@ use super::types::{Plugin, PluginManifest, PluginSource};
 pub fn discover_plugins(project_root: Option<&Path>) -> Vec<Plugin> {
     let mut plugins = Vec::new();
 
-    // User plugins: ~/.claude/plugins/
+    // User plugins: ~/.claude-omni/plugins/
     if let Some(home) = dirs::home_dir() {
-        let user_dir = home.join(".claude").join("plugins");
+        let user_dir = home.join(crate::config::paths::OMNI_DIR_NAME).join("plugins");
         plugins.extend(load_plugins_dir(&user_dir, PluginSource::User));
     }
 
-    // Project plugins: <root>/.claude/plugins/
+    // Project plugins: <root>/.claude-omni/plugins/
     if let Some(root) = project_root {
-        let project_dir = root.join(".claude").join("plugins");
+        let project_dir = root.join(crate::config::paths::PROJECT_DIR_NAME).join("plugins");
         plugins.extend(load_plugins_dir(&project_dir, PluginSource::Project));
     }
 

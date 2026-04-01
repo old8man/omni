@@ -268,7 +268,7 @@ impl ToolExecutor for ConfigTool {
 /// Get the path to the global config file.
 fn config_file_path() -> Result<std::path::PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".claude").join("settings.json"))
+    Ok(home.join(".claude-omni").join("settings.json"))
 }
 
 /// Read a setting value from the config file.

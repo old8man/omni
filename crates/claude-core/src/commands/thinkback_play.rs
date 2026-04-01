@@ -35,8 +35,8 @@ impl Command for ThinkbackPlayCommand {
 
     async fn execute(&self, _args: &str, ctx: &CommandContext) -> CommandResult {
         // Check for thinkback plugin installation
-        let plugin_dir = dirs::config_dir()
-            .map(|d| d.join("claude").join("plugins"));
+        let plugin_dir = crate::config::paths::claude_dir()
+            .map(|d| d.join("plugins")).ok();
 
         let thinkback_installed = plugin_dir
             .as_ref()

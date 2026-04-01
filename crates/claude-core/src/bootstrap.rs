@@ -63,11 +63,11 @@ pub fn load_settings(project_root: &Path) -> Settings {
         .unwrap_or_default();
 
     // 2. Project settings
-    let project_settings_path = project_root.join(".claude").join("settings.json");
+    let project_settings_path = project_root.join(crate::config::paths::PROJECT_DIR_NAME).join("settings.json");
     let project = load_settings_file(&project_settings_path);
 
     // 3. Project-local settings (gitignored)
-    let local_settings_path = project_root.join(".claude").join("settings.local.json");
+    let local_settings_path = project_root.join(crate::config::paths::PROJECT_DIR_NAME).join("settings.local.json");
     let local = load_settings_file(&local_settings_path);
 
     // Merge: user < project < local (using the existing JSON-level merge)
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn test_load_settings_project_layering() {
         let dir = tempfile::tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
+        let claude_dir = dir.path().join(crate::config::paths::PROJECT_DIR_NAME);
         std::fs::create_dir_all(&claude_dir).unwrap();
 
         // Project settings

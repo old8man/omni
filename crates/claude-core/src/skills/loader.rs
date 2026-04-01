@@ -174,15 +174,15 @@ fn extract_description_from_markdown(md: &str) -> String {
 pub fn discover_all_skills(project_root: Option<&Path>) -> Vec<Skill> {
     let mut skills = get_bundled_skills();
 
-    // User skills: ~/.claude/skills/
+    // User skills: ~/.claude-omni/skills/
     if let Some(home) = dirs::home_dir() {
-        let user_dir = home.join(".claude").join("skills");
+        let user_dir = home.join(crate::config::paths::OMNI_DIR_NAME).join("skills");
         skills.extend(load_skills_dir(&user_dir, SkillSource::User));
     }
 
-    // Project skills: <project_root>/.claude/skills/
+    // Project skills: <project_root>/.claude-omni/skills/
     if let Some(root) = project_root {
-        let project_dir = root.join(".claude").join("skills");
+        let project_dir = root.join(crate::config::paths::PROJECT_DIR_NAME).join("skills");
         skills.extend(load_skills_dir(&project_dir, SkillSource::Project));
     }
 

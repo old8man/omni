@@ -24,7 +24,7 @@ impl Command for MemoryCommand {
             if p.exists() {
                 found.push(format!("  {}", p.display()));
             }
-            let p2 = root.join(".claude").join("CLAUDE.md");
+            let p2 = root.join(crate::config::paths::PROJECT_DIR_NAME).join("CLAUDE.md");
             if p2.exists() {
                 found.push(format!("  {}", p2.display()));
             }
@@ -32,7 +32,7 @@ impl Command for MemoryCommand {
 
         // Check home directory
         if let Some(home) = dirs::home_dir() {
-            let p = home.join(".claude").join("CLAUDE.md");
+            let p = home.join(crate::config::paths::OMNI_DIR_NAME).join("CLAUDE.md");
             if p.exists() {
                 found.push(format!("  {}", p.display()));
             }

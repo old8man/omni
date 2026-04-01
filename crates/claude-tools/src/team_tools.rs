@@ -11,7 +11,7 @@ use claude_core::types::events::ToolResultData;
 fn team_config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
+        .join(".claude-omni")
         .join("teams")
 }
 
