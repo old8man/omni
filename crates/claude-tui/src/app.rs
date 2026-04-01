@@ -56,6 +56,8 @@ pub enum AppEvent {
     /// call `engine.run_turn()` and handle the next result (which may be
     /// another round of tool use or a final answer).
     ContinueTurn,
+    /// Result of a background `engine.run_turn()` call.
+    TurnComplete(Result<TurnResult, anyhow::Error>),
 }
 
 /// Pending tool that needs permission before execution.
@@ -253,11 +255,12 @@ impl App {
     /// Run the TUI wired to the QueryEngine.
     pub async fn run_with_engine(
         &mut self,
-        mut engine: QueryEngine,
+        engine: QueryEngine,
         tools: ToolRegistry,
         cancel: CancellationToken,
         permission_mode: PermissionMode,
     ) -> Result<()> {
+        let engine = std::sync::Arc::new(tokio::sync::Mutex::new(engine));
         terminal::enable_raw_mode()?;
         execute!(
             io::stdout(),
@@ -352,7 +355,7 @@ impl App {
                         })
                     },
                 );
-            engine.set_tool_call_fn(tool_call_fn);
+            engine.lock().await.set_tool_call_fn(tool_call_fn);
         }
 
         let perm_ctx = ToolPermissionContext {
@@ -780,7 +783,7 @@ impl App {
                                     });
                                 }
                                 CommandResult::ClearConversation => {
-                                    engine.clear_messages();
+                                    engine.lock().await.clear_messages();
                                     self.message_list.clear();
                                     self.message_list.push(MessageEntry::System {
                                         text: "Conversation cleared.".to_string(),
@@ -805,7 +808,7 @@ impl App {
                                             }
                                         }
                                     });
-                                    match engine.compact(&stream_tx).await {
+                                    match engine.lock().await.compact(&stream_tx).await {
                                         Ok(summary) => {
                                             self.message_list.push(MessageEntry::System {
                                                 text: format!("Compacted: {summary}"),
@@ -833,9 +836,9 @@ impl App {
                                     match mgr.load_session(&id) {
                                         Ok(session) => {
                                             // Restore messages into the engine
-                                            engine.clear_messages();
+                                            engine.lock().await.clear_messages();
                                             for msg in &session.messages {
-                                                engine.add_raw_message(msg.clone());
+                                                engine.lock().await.add_raw_message(msg.clone());
                                             }
                                             self.message_list.clear();
                                             self.message_list.push(MessageEntry::System {
@@ -954,7 +957,7 @@ impl App {
                         .push(MessageEntry::User { text: text.clone(), images: vec![] });
 
                     // Add to engine
-                    engine.add_user_message(&text);
+                    engine.lock().await.add_user_message(&text);
                     self.engine_busy = true;
                     self.spinner.start(SpinnerMode::Thinking);
                     // Show a tip in the spinner while thinking (filter out bad suggestions)
@@ -978,57 +981,17 @@ impl App {
                         }
                     });
 
-                    match engine.run_turn(&stream_tx).await {
-                        Ok(TurnResult::Done(_stop_reason)) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                            // Send terminal notification that the task completed
-                            let _ = notifications::send_notification(
-                                &NotificationOptions {
-                                    message: "Response complete".to_string(),
-                                    title: Some("Claude Code".to_string()),
-                                    notification_type: "turn_complete".to_string(),
-                                },
-                                &self.notification_channel,
-                            );
-                        }
-                        Ok(TurnResult::ToolUse(tool_uses)) => {
-                            // Start processing tool uses
-                            pending_tools = tool_uses
-                                .into_iter()
-                                .map(|info| PendingTool { info })
-                                .collect();
-                            pending_tool_index = 0;
-                            // Kick off permission check for first tool
-                            self.check_next_tool_permission(
-                                &pending_tools,
-                                &mut pending_tool_index,
-                                &perm_ctx,
-                                &tools,
-                                &tx,
-                            );
-                        }
-                        Ok(TurnResult::ContinueRecovery)
-                        | Ok(TurnResult::StopHookBlocking)
-                        | Ok(TurnResult::TokenBudgetContinuation) => {
-                            // Re-run the turn (recovery, stop-hook block, or budget continuation)
-                            self.message_list.push(MessageEntry::System {
-                                text: "Continuing...".to_string(),
-                                severity: SystemSeverity::Info,
-                            });
-                            let tx2 = tx.clone();
-                            tokio::spawn(async move {
-                                let _ = tx2.send(AppEvent::ContinueTurn).await;
-                            });
-                        }
-                        Err(e) => {
-                            self.spinner.stop();
-                            self.engine_busy = false;
-                            self.message_list.push(MessageEntry::System {
-                                text: format!("Error: {}", e),
-                                severity: SystemSeverity::Error,
-                            });
-                        }
+                    // Spawn run_turn in background so UI event loop stays responsive
+                    {
+                        let engine_clone = engine.clone();
+                        let tx_result = tx.clone();
+                        tokio::spawn(async move {
+                            let result = {
+                                let mut eng = engine_clone.lock().await;
+                                eng.run_turn(&stream_tx).await
+                            };
+                            let _ = tx_result.send(AppEvent::TurnComplete(result)).await;
+                        });
                     }
                 }
                 AppEvent::Stream(stream_event) => {
@@ -1062,7 +1025,7 @@ impl App {
                                 ),
                                 Err(e) => (format!("Error: {}", e), true),
                             };
-                            engine.add_tool_result(&info.id, &result_text, is_error);
+                            engine.lock().await.add_tool_result(&info.id, &result_text, is_error);
                             // Accumulate tool info for summary generation
                             self.turn_tool_infos.push(SummaryToolInfo {
                                 name: info.name.clone(),
@@ -1103,7 +1066,7 @@ impl App {
                         }
                         "deny" => {
                             let info = &pending_tools[tool_idx].info;
-                            engine.add_tool_result(&info.id, "Permission denied by user", true);
+                            engine.lock().await.add_tool_result(&info.id, "Permission denied by user", true);
                             self.message_list.push(MessageEntry::ToolResult {
                                 id: info.id.clone(),
                                 name: info.name.clone(),
@@ -1147,7 +1110,21 @@ impl App {
                         }
                     });
 
-                    match engine.run_turn(&stream_tx).await {
+                    // Spawn in background so UI stays responsive
+                    {
+                        let engine_clone = engine.clone();
+                        let tx_result = tx.clone();
+                        tokio::spawn(async move {
+                            let result = {
+                                let mut eng = engine_clone.lock().await;
+                                eng.run_turn(&stream_tx).await
+                            };
+                            let _ = tx_result.send(AppEvent::TurnComplete(result)).await;
+                        });
+                    }
+                }
+                AppEvent::TurnComplete(result) => {
+                    match result {
                         Ok(TurnResult::Done(_)) => {
                             self.spinner.stop();
                             self.engine_busy = false;
