@@ -303,9 +303,6 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gcp_auth_refresh: Option<String>,
 
-    /// Path to script that outputs OpenTelemetry headers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub otel_headers_helper: Option<String>,
 
     // ── Plugins ───────────────────────────────────────────────────────
     /// Enabled plugins.

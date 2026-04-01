@@ -6,10 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::memdir::{
-    build_memory_lines, truncate_entrypoint_content, DIR_EXISTS_GUIDANCE, ENTRYPOINT_NAME,
-    MAX_ENTRYPOINT_LINES,
-};
+use super::memdir::{ENTRYPOINT_NAME, MAX_ENTRYPOINT_LINES};
 use super::memory_types::{
     memory_drift_caveat, memory_frontmatter_example, trusting_recall_section,
     types_section_combined, what_not_to_save_section,
