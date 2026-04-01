@@ -2,7 +2,7 @@ mod engine_loop;
 mod event_handler;
 mod renderer;
 
-use std::io::{self, Stdout};
+use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -11,10 +11,8 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
     KeyModifiers, MouseEvent,
 };
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
+use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -73,7 +71,7 @@ pub(crate) struct ActionMenu {
 }
 
 pub struct App {
-    pub(crate) terminal: Terminal<CrosstermBackend<Stdout>>,
+    pub(crate) terminal: DefaultTerminal,
     pub(crate) theme: Theme,
     pub(crate) spinner: SpinnerState,
     pub(crate) should_quit: bool,
@@ -155,8 +153,10 @@ impl App {
     }
 
     pub fn new() -> Result<Self> {
-        let backend = CrosstermBackend::new(io::stdout());
-        let terminal = Terminal::new(backend)?;
+        // ratatui::try_init() handles raw mode, alternate screen, and panic hook
+        let terminal = ratatui::try_init()?;
+        // Mouse capture and cursor hiding are not covered by ratatui::init()
+        execute!(io::stdout(), EnableMouseCapture, cursor::Hide)?;
         Ok(Self {
             terminal,
             theme: detect_theme(),
@@ -213,14 +213,6 @@ impl App {
 
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
     pub async fn run(&mut self) -> Result<()> {
-        terminal::enable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            cursor::Hide
-        )?;
-
         let (tx, mut rx) = mpsc::channel::<AppEvent>(100);
 
         // Spawn input reader
@@ -283,13 +275,8 @@ impl App {
             }
         }
 
-        terminal::disable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            LeaveAlternateScreen,
-            cursor::Show
-        )?;
+        execute!(io::stdout(), DisableMouseCapture, cursor::Show)?;
+        ratatui::try_restore()?;
         Ok(())
     }
 
@@ -302,13 +289,6 @@ impl App {
         permission_mode: PermissionMode,
     ) -> Result<()> {
         let engine = std::sync::Arc::new(tokio::sync::Mutex::new(engine));
-        terminal::enable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableMouseCapture,
-            cursor::Hide
-        )?;
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
@@ -1315,26 +1295,16 @@ impl App {
             }
         }
 
-        // Cleanup
-        terminal::disable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            LeaveAlternateScreen,
-            cursor::Show
-        )?;
+        // Cleanup: disable mouse/cursor first, then let ratatui handle raw mode + alternate screen
+        execute!(io::stdout(), DisableMouseCapture, cursor::Show)?;
+        ratatui::try_restore()?;
         Ok(())
     }
 }
 
 impl Drop for App {
     fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            LeaveAlternateScreen,
-            cursor::Show
-        );
+        let _ = execute!(io::stdout(), DisableMouseCapture, cursor::Show);
+        ratatui::restore();
     }
 }

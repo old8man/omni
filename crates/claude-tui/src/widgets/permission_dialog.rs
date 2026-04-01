@@ -9,6 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use crate::theme;
+
 /// Permission dialog state.
 pub struct PermissionDialog {
     pub tool_name: String,
@@ -84,7 +86,7 @@ fn json_highlight_line(line: &str) -> Line<'_> {
                 if !buf.is_empty() {
                     spans.push(Span::styled(
                         std::mem::take(&mut buf),
-                        Style::default().fg(Color::White),
+                        theme::STYLE_WHITE,
                     ));
                 }
                 // Consume the quoted string
@@ -112,14 +114,14 @@ fn json_highlight_line(line: &str) -> Line<'_> {
                 } else {
                     Color::Green // string value
                 };
-                spans.push(Span::styled(s, Style::default().fg(color)));
+                spans.push(Span::styled(s, Style::new().fg(color)));
             }
             '0'..='9' | '-' if buf.is_empty() || buf.ends_with(|c: char| !c.is_alphanumeric()) =>
             {
                 if !buf.is_empty() {
                     spans.push(Span::styled(
                         std::mem::take(&mut buf),
-                        Style::default().fg(Color::White),
+                        theme::STYLE_WHITE,
                     ));
                 }
                 let mut num = String::new();
@@ -130,21 +132,16 @@ fn json_highlight_line(line: &str) -> Line<'_> {
                         break;
                     }
                 }
-                spans.push(Span::styled(num, Style::default().fg(Color::Yellow)));
+                spans.push(Span::styled(num, theme::STYLE_YELLOW));
             }
             '{' | '}' | '[' | ']' => {
                 if !buf.is_empty() {
                     spans.push(Span::styled(
                         std::mem::take(&mut buf),
-                        Style::default().fg(Color::White),
+                        theme::STYLE_WHITE,
                     ));
                 }
-                spans.push(Span::styled(
-                    ch.to_string(),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                spans.push(Span::styled(ch.to_string(), theme::STYLE_BOLD_WHITE));
                 chars.next();
             }
             _ => {
@@ -161,7 +158,7 @@ fn json_highlight_line(line: &str) -> Line<'_> {
             "null" => Color::Red,
             _ => Color::White,
         };
-        spans.push(Span::styled(buf, Style::default().fg(color)));
+        spans.push(Span::styled(buf, Style::new().fg(color)));
     }
 
     Line::from(spans)
@@ -172,20 +169,14 @@ impl Widget for &PermissionDialog {
         // Clear background
         Clear.render(area, buf);
 
-        let border_style = Style::default().fg(Color::Yellow);
         let block = Block::default()
             .title(Line::from(vec![
-                Span::styled(" ", border_style),
-                Span::styled(
-                    &self.tool_name,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" ", border_style),
+                Span::styled(" ", theme::STYLE_YELLOW),
+                Span::styled(&self.tool_name, theme::STYLE_BOLD_YELLOW),
+                Span::styled(" ", theme::STYLE_YELLOW),
             ]))
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(theme::STYLE_YELLOW);
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -203,10 +194,7 @@ impl Widget for &PermissionDialog {
         } else {
             self.description.clone()
         };
-        let desc_line = Line::from(Span::styled(
-            desc_text,
-            Style::default().fg(Color::White),
-        ));
+        let desc_line = Line::from(Span::styled(desc_text, theme::STYLE_WHITE));
         buf.set_line(inner.x + 1, y, &desc_line, inner.width.saturating_sub(2));
         y += 1;
 
@@ -216,7 +204,7 @@ impl Widget for &PermissionDialog {
             .chars()
             .take(content_width)
             .collect::<String>();
-        let sep_line = Line::from(Span::styled(sep, Style::default().fg(Color::DarkGray)));
+        let sep_line = Line::from(Span::styled(sep, theme::STYLE_DARK_GRAY));
         buf.set_line(inner.x + 1, y, &sep_line, inner.width.saturating_sub(2));
         y += 1;
 
@@ -249,10 +237,7 @@ impl Widget for &PermissionDialog {
                 start + 1,
                 self.input_lines.len()
             );
-            let ind_line = Line::from(Span::styled(
-                indicator,
-                Style::default().fg(Color::DarkGray),
-            ));
+            let ind_line = Line::from(Span::styled(indicator, theme::STYLE_DARK_GRAY));
             // Place at right side of current y
             let ind_x = inner.x + inner.width.saturating_sub(ind_line.width() as u16 + 1);
             buf.set_line(ind_x, y.min(inner.y + inner.height - 3), &ind_line, 20);
@@ -261,7 +246,7 @@ impl Widget for &PermissionDialog {
         // ── Separator before buttons ────────────────────────────────────
         let button_sep_y = inner.y + inner.height - 3;
         let sep2 = "\u{2500}".repeat(content_width);
-        let sep2_line = Line::from(Span::styled(sep2, Style::default().fg(Color::DarkGray)));
+        let sep2_line = Line::from(Span::styled(sep2, theme::STYLE_DARK_GRAY));
         buf.set_line(
             inner.x + 1,
             button_sep_y,
@@ -297,7 +282,7 @@ impl Widget for &PermissionDialog {
         let hint_y = inner.y + inner.height - 1;
         let hint = Line::from(Span::styled(
             " Tab: switch  Enter: confirm  \u{2191}\u{2193}: scroll ",
-            Style::default().fg(Color::DarkGray),
+            theme::STYLE_DARK_GRAY,
         ));
         buf.set_line(inner.x + 1, hint_y, &hint, inner.width.saturating_sub(2));
     }

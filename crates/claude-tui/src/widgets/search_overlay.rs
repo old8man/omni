@@ -6,9 +6,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+
+use crate::theme;
 
 /// Action returned by the search overlay's key handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,10 +196,7 @@ impl<'a> Widget for SearchOverlayWidget<'a> {
 
         // "Search: " label
         let label = " Search: ";
-        let label_style = Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD);
+        let label_style = theme::STYLE_BOLD_YELLOW.bg(Color::DarkGray);
         let label_span = Span::styled(label, label_style);
 
         // Query text

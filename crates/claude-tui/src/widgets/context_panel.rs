@@ -7,9 +7,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
+
+use crate::theme;
 
 /// A file that is part of the current context.
 #[derive(Clone, Debug)]
@@ -156,10 +158,7 @@ impl<'a> ContextPanelWidget<'a> {
         let total = self.panel.total_tokens();
         let utilization = self.panel.utilization();
         lines.push(Line::from(vec![
-            Span::styled(
-                " Tokens: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(" Tokens: ", theme::BOLD),
             Span::styled(
                 format_tokens(total),
                 Style::default().fg(if utilization > 0.8 {
@@ -172,7 +171,7 @@ impl<'a> ContextPanelWidget<'a> {
             ),
             Span::styled(
                 format!(" / {}", format_tokens(self.panel.max_tokens)),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             ),
         ]));
 
@@ -193,13 +192,10 @@ impl<'a> ContextPanelWidget<'a> {
                 "\u{2588}".repeat(filled),
                 Style::default().fg(bar_color),
             ),
-            Span::styled(
-                "\u{2591}".repeat(empty),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("\u{2591}".repeat(empty), theme::STYLE_DARK_GRAY),
             Span::styled(
                 format!(" {:.0}%", utilization * 100.0),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             ),
         ]));
 
@@ -207,15 +203,15 @@ impl<'a> ContextPanelWidget<'a> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" In: {} ", format_tokens(self.panel.input_tokens)),
-                Style::default().fg(Color::Cyan),
+                theme::STYLE_CYAN,
             ),
             Span::styled(
                 format!("Out: {} ", format_tokens(self.panel.output_tokens)),
-                Style::default().fg(Color::Magenta),
+                theme::STYLE_MAGENTA,
             ),
             Span::styled(
                 format!("Msgs: {}", self.panel.message_count),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             ),
         ]));
 
@@ -225,20 +221,15 @@ impl<'a> ContextPanelWidget<'a> {
         if !self.panel.files.is_empty() {
             lines.push(Line::from(Span::styled(
                 " Files in context:",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                theme::STYLE_BOLD_WHITE,
             )));
             for file in &self.panel.files {
                 lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(
-                        file.path.clone(),
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::raw("  "),
+                    Span::styled(file.path.clone(), theme::STYLE_CYAN),
                     Span::styled(
                         format!(" ({})", format_tokens(file.tokens)),
-                        Style::default().fg(Color::DarkGray),
+                        theme::STYLE_DARK_GRAY,
                     ),
                 ]));
             }
@@ -249,9 +240,7 @@ impl<'a> ContextPanelWidget<'a> {
         if !self.panel.tool_calls.is_empty() {
             lines.push(Line::from(Span::styled(
                 " Recent tools:",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                theme::STYLE_BOLD_WHITE,
             )));
             for call in self.panel.tool_calls.iter().rev().take(10) {
                 let indicator = if call.success { "\u{2714}" } else { "\u{2718}" };
@@ -261,14 +250,11 @@ impl<'a> ContextPanelWidget<'a> {
                     Color::Red
                 };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {} ", indicator), Style::default().fg(color)),
-                    Span::styled(
-                        call.name.clone(),
-                        Style::default().fg(Color::Magenta),
-                    ),
+                    Span::styled(format!("  {} ", indicator), Style::new().fg(color)),
+                    Span::styled(call.name.clone(), theme::STYLE_MAGENTA),
                     Span::styled(
                         format!(" {}", truncate(&call.summary, 30)),
-                        Style::default().fg(Color::DarkGray),
+                        theme::STYLE_DARK_GRAY,
                     ),
                 ]));
             }
@@ -287,7 +273,7 @@ impl<'a> Widget for ContextPanelWidget<'a> {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Context ")
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(theme::STYLE_DARK_GRAY);
         let inner = block.inner(area);
         block.render(area, buf);
 

@@ -5,10 +5,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use std::time::Instant;
+
+use crate::theme;
 
 const SPINNER_FRAMES: &[&str] = &[
     "\u{280B}", // ⠋
@@ -184,28 +185,22 @@ impl Widget for &SpinnerState {
         let elapsed = self.elapsed_str();
 
         let mut spans = vec![
-            Span::styled(
-                format!(" {} ", frame_char),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(self.mode.label(), Style::default().fg(Color::White)),
-            Span::styled(
-                format!(" ({})", elapsed),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!(" {} ", frame_char), theme::STYLE_CYAN),
+            Span::styled(self.mode.label(), theme::STYLE_WHITE),
+            Span::styled(format!(" ({})", elapsed), theme::STYLE_DARK_GRAY),
         ];
 
         if self.tokens > 0 {
             spans.push(Span::styled(
                 format!(" \u{00B7} {} tokens", self.tokens),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             ));
         }
 
         if let Some(ref tip) = self.tip {
             spans.push(Span::styled(
                 format!(" \u{00B7} Tip: {}", tip),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             ));
         }
 
@@ -220,16 +215,10 @@ impl Widget for &SpinnerState {
             }
             let sub_elapsed = sub.elapsed_str();
             let sub_line = Line::from(vec![
-                Span::styled("   ", Style::default()),
-                Span::styled(
-                    format!("{} ", sub.frame_char()),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(sub.verb.label(), Style::default().fg(Color::White)),
-                Span::styled(
-                    format!(" ({})", sub_elapsed),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::raw("   "),
+                Span::styled(format!("{} ", sub.frame_char()), theme::STYLE_CYAN),
+                Span::styled(sub.verb.label(), theme::STYLE_WHITE),
+                Span::styled(format!(" ({})", sub_elapsed), theme::STYLE_DARK_GRAY),
             ]);
             buf.set_line(area.x, y, &sub_line, area.width);
         }

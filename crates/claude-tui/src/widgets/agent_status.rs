@@ -5,9 +5,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
+
+use crate::theme;
 
 /// Status of an individual agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,7 +148,7 @@ impl<'a> AgentStatusWidget<'a> {
         if self.panel.agents.is_empty() {
             lines.push(Line::from(Span::styled(
                 " No active agents",
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             )));
             return lines;
         }
@@ -155,9 +157,7 @@ impl<'a> AgentStatusWidget<'a> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {} agent{} running", running, if running == 1 { "" } else { "s" }),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                theme::STYLE_BOLD_WHITE,
             ),
         ]));
         lines.push(Line::from(""));
@@ -168,13 +168,8 @@ impl<'a> AgentStatusWidget<'a> {
 
             // Agent name and status icon
             lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", icon), Style::default().fg(color)),
-                Span::styled(
-                    agent.name.clone(),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(format!(" {} ", icon), Style::new().fg(color)),
+                Span::styled(agent.name.clone(), theme::STYLE_BOLD_WHITE),
             ]));
 
             // Current task
@@ -185,7 +180,7 @@ impl<'a> AgentStatusWidget<'a> {
             };
             lines.push(Line::from(Span::styled(
                 format!("   {}", task_display),
-                Style::default().fg(Color::DarkGray),
+                theme::STYLE_DARK_GRAY,
             )));
 
             // Progress bar (if applicable)
@@ -195,18 +190,9 @@ impl<'a> AgentStatusWidget<'a> {
                 let empty = bar_width - filled;
                 lines.push(Line::from(vec![
                     Span::raw("   "),
-                    Span::styled(
-                        "\u{2588}".repeat(filled),
-                        Style::default().fg(color),
-                    ),
-                    Span::styled(
-                        "\u{2591}".repeat(empty),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(
-                        format!(" {}%", progress),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled("\u{2588}".repeat(filled), Style::new().fg(color)),
+                    Span::styled("\u{2591}".repeat(empty), theme::STYLE_DARK_GRAY),
+                    Span::styled(format!(" {}%", progress), theme::STYLE_DARK_GRAY),
                 ]));
             }
 
@@ -226,7 +212,7 @@ impl<'a> Widget for AgentStatusWidget<'a> {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Agents ")
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(theme::STYLE_DARK_GRAY);
         let inner = block.inner(area);
         block.render(area, buf);
 

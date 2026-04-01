@@ -4,9 +4,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Widget};
+
+use crate::theme;
 
 /// State for the welcome screen.
 pub struct WelcomeState {
@@ -37,7 +38,7 @@ impl<'a> Widget for WelcomeWidget<'a> {
             // Fallback for very small terminals
             let line = Line::from(Span::styled(
                 "Claude Code — Type a message or /help",
-                Style::default().fg(Color::Cyan),
+                theme::STYLE_CYAN,
             ));
             let p = Paragraph::new(line).alignment(Alignment::Center);
             let y = area.y + area.height / 2;
@@ -56,13 +57,8 @@ impl<'a> Widget for WelcomeWidget<'a> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(
-                " Claude Code ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))
+            .border_style(theme::STYLE_DARK_GRAY)
+            .title(Span::styled(" Claude Code ", theme::STYLE_BOLD_CYAN))
             .title_alignment(Alignment::Center);
 
         let inner = block.inner(box_area);
@@ -73,12 +69,10 @@ impl<'a> Widget for WelcomeWidget<'a> {
         }
 
         // Build content lines
-        let key_style = Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(Color::DarkGray);
-        let label_style = Style::default().fg(Color::Gray);
-        let value_style = Style::default().fg(Color::White);
+        let key_style = theme::STYLE_BOLD_YELLOW;
+        let desc_style = theme::STYLE_DARK_GRAY;
+        let label_style = theme::STYLE_GRAY;
+        let value_style = theme::STYLE_WHITE;
 
         let lines = vec![
             Line::from(""),
@@ -91,24 +85,24 @@ impl<'a> Widget for WelcomeWidget<'a> {
                 Span::styled("/help", key_style),
             ]),
             Line::from(""),
-            Line::from(Span::styled("  Tips:", Style::default().fg(Color::White))),
+            Line::from(Span::styled("  Tips:", theme::STYLE_WHITE)),
             Line::from(vec![
-                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                Span::styled("  • ", theme::STYLE_CYAN),
                 Span::styled("/help", key_style),
                 Span::styled("    — show available commands", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                Span::styled("  • ", theme::STYLE_CYAN),
                 Span::styled("/model", key_style),
                 Span::styled("   — change model", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                Span::styled("  • ", theme::STYLE_CYAN),
                 Span::styled("Ctrl+C", key_style),
                 Span::styled("   — cancel request / clear input", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                Span::styled("  • ", theme::STYLE_CYAN),
                 Span::styled("Ctrl+D", key_style),
                 Span::styled("   — quit", desc_style),
             ]),

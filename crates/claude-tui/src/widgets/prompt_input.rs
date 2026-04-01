@@ -5,6 +5,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use crate::theme;
+
 /// Actions returned by the prompt input key handler.
 pub enum InputAction {
     /// Submit the entire text buffer.
@@ -1324,12 +1326,9 @@ impl<'a> Widget for PromptInputWidget<'a> {
                 .history_search_current_match()
                 .unwrap_or("");
             let line = Line::from(vec![
-                Span::styled(
-                    &prompt_text,
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(matched, Style::default().fg(Color::White)),
+                Span::styled(&prompt_text, theme::STYLE_BOLD_YELLOW),
+                Span::styled(" | ", theme::STYLE_DARK_GRAY),
+                Span::styled(matched, theme::STYLE_WHITE),
             ]);
             buf.set_line(inner.x, inner.y, &line, inner.width);
             return;
@@ -1393,7 +1392,7 @@ impl<'a> Widget for PromptInputWidget<'a> {
             };
 
             let spans = vec![
-                Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                Span::styled(prefix, theme::STYLE_CYAN),
                 Span::raw(line_text.as_str()),
             ];
             let line = Line::from(spans);

@@ -17,6 +17,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::theme;
+
 /// Notification severity level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotificationLevel {
@@ -425,7 +427,7 @@ impl<'a> Widget for NotificationWidget<'a> {
             let severity_color = notif.level.color();
             let icon = notif.level.icon();
             let label = notif.level.label();
-            let bg_color = Color::Rgb(30, 30, 30);
+            let bg_color = theme::NOTIF_BG;
 
             for (line_idx, line_text) in lines.iter().enumerate() {
                 let y = area.y + row_offset;
@@ -443,7 +445,7 @@ impl<'a> Widget for NotificationWidget<'a> {
                 let x = area.x + area.width.saturating_sub(notif_width as u16);
 
                 // Background fill
-                let bg_style = Style::default().bg(bg_color).fg(Color::White);
+                let bg_style = theme::STYLE_NOTIF;
                 for col in x..area.x + area.width {
                     buf[(col, y)].set_char(' ').set_style(bg_style);
                 }
@@ -452,7 +454,7 @@ impl<'a> Widget for NotificationWidget<'a> {
                 if x < area.x + area.width {
                     buf[(x, y)]
                         .set_char('\u{2588}') // █
-                        .set_style(Style::default().fg(border_color).bg(bg_color));
+                        .set_style(Style::new().fg(border_color).bg(bg_color));
                 }
 
                 // Render content
@@ -460,34 +462,20 @@ impl<'a> Widget for NotificationWidget<'a> {
                 let available_width = area.width.saturating_sub(render_x - area.x);
 
                 if line_idx == 0 {
+                    let bold_notif = Style::new()
+                        .fg(severity_color)
+                        .bg(bg_color)
+                        .add_modifier(Modifier::BOLD);
                     let line = Line::from(vec![
-                        Span::styled(
-                            format!(" {} ", icon),
-                            Style::default()
-                                .fg(severity_color)
-                                .bg(bg_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("{}: ", label),
-                            Style::default()
-                                .fg(severity_color)
-                                .bg(bg_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            line_text.to_string(),
-                            Style::default().fg(Color::White).bg(bg_color),
-                        ),
-                        Span::styled(" ", Style::default().bg(bg_color)),
+                        Span::styled(format!(" {} ", icon), bold_notif),
+                        Span::styled(format!("{}: ", label), bold_notif),
+                        Span::styled(line_text.to_string(), theme::STYLE_NOTIF),
+                        Span::styled(" ", Style::new().bg(bg_color)),
                     ]);
                     buf.set_line(render_x, y, &line, available_width);
                 } else {
                     let line = Line::from(vec![
-                        Span::styled(
-                            format!("  {} ", line_text),
-                            Style::default().fg(Color::White).bg(bg_color),
-                        ),
+                        Span::styled(format!("  {} ", line_text), theme::STYLE_NOTIF),
                     ]);
                     buf.set_line(render_x, y, &line, available_width);
                 }

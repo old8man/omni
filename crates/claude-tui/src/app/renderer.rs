@@ -2,6 +2,8 @@ use anyhow::Result;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
+use crate::theme;
+
 use crate::widgets::message_list::MessageListWidget;
 use crate::widgets::notification::NotificationWidget;
 use crate::widgets::prompt_input::PromptInputWidget;
@@ -116,17 +118,17 @@ impl App {
             let header_spans = vec![
                 ratatui::text::Span::styled(
                     " Claude Code (Rust)",
-                    ratatui::style::Style::default()
+                    ratatui::style::Style::new()
                         .fg(theme.accent)
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 ratatui::text::Span::styled(
                     " | ",
-                    ratatui::style::Style::default().fg(theme.border),
+                    ratatui::style::Style::new().fg(theme.border),
                 ),
                 ratatui::text::Span::styled(
                     &state_model,
-                    ratatui::style::Style::default().fg(theme.muted),
+                    ratatui::style::Style::new().fg(theme.muted),
                 ),
             ];
             let header = Paragraph::new(ratatui::text::Line::from(header_spans));
@@ -135,7 +137,7 @@ impl App {
             // Header separator
             let border_line = "\u{2500}".repeat(area.width as usize);
             let header_sep = Paragraph::new(border_line)
-                .style(ratatui::style::Style::default().fg(theme.border));
+                .style(ratatui::style::Style::new().fg(theme.border));
             frame.render_widget(header_sep, layout.header_separator);
 
             // Messages area (or welcome screen for new sessions)
@@ -250,21 +252,21 @@ impl App {
                     }
                     let is_selected = item_idx == comp.selected;
                     let label_style = if is_selected {
-                        ratatui::style::Style::default()
+                        ratatui::style::Style::new()
                             .fg(ratatui::style::Color::Black)
                             .bg(ratatui::style::Color::Cyan)
                             .add_modifier(ratatui::style::Modifier::BOLD)
                     } else {
-                        ratatui::style::Style::default()
+                        ratatui::style::Style::new()
                             .fg(ratatui::style::Color::White)
                             .bg(ratatui::style::Color::Rgb(40, 40, 50))
                     };
                     let desc_style = if is_selected {
-                        ratatui::style::Style::default()
+                        ratatui::style::Style::new()
                             .fg(ratatui::style::Color::DarkGray)
                             .bg(ratatui::style::Color::Cyan)
                     } else {
-                        ratatui::style::Style::default()
+                        ratatui::style::Style::new()
                             .fg(ratatui::style::Color::Gray)
                             .bg(ratatui::style::Color::Rgb(40, 40, 50))
                     };
@@ -294,7 +296,7 @@ impl App {
                         // Show "up arrow" at top
                         let up_span = ratatui::text::Span::styled(
                             "\u{25b2}",
-                            ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                            theme::STYLE_DARK_GRAY,
                         );
                         frame.render_widget(
                             ratatui::widgets::Paragraph::new(ratatui::text::Line::from(up_span)),
@@ -306,7 +308,7 @@ impl App {
                         let down_y = popup_y + popup_height.saturating_sub(1);
                         let down_span = ratatui::text::Span::styled(
                             "\u{25bc}",
-                            ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                            theme::STYLE_DARK_GRAY,
                         );
                         frame.render_widget(
                             ratatui::widgets::Paragraph::new(ratatui::text::Line::from(down_span)),
@@ -360,29 +362,29 @@ impl App {
                 let block = ratatui::widgets::Block::default()
                     .title(" Message Actions ")
                     .borders(ratatui::widgets::Borders::ALL)
-                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan))
-                    .style(ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(30, 30, 40)));
+                    .border_style(theme::STYLE_CYAN)
+                    .style(ratatui::style::Style::new().bg(theme::STATUS_BG));
 
                 let menu_lines = vec![
                     ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(" [C] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::styled(" [C] ", theme::STYLE_BOLD_CYAN),
                         ratatui::text::Span::raw("Copy to clipboard"),
                     ]),
                     ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(" [E] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::styled(" [E] ", theme::STYLE_BOLD_CYAN),
                         ratatui::text::Span::raw("Edit (put in input)"),
                     ]),
                     ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(" [R] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::styled(" [R] ", theme::STYLE_BOLD_CYAN),
                         ratatui::text::Span::raw("Rewind to here"),
                     ]),
                     ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(" [S] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::styled(" [S] ", theme::STYLE_BOLD_CYAN),
                         ratatui::text::Span::raw("Summarize"),
                     ]),
                     ratatui::text::Line::from(ratatui::text::Span::styled(
                         " Esc to close",
-                        ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                        theme::STYLE_DARK_GRAY,
                     )),
                 ];
                 let menu_paragraph = ratatui::widgets::Paragraph::new(menu_lines).block(block);

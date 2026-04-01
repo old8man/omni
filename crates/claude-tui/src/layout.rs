@@ -46,24 +46,24 @@ impl TuiLayout {
         let desired_input = (input_line_count + 2).max(3);
         let input_height = desired_input.min(max_input_height).max(3);
 
-        let chunks = Layout::default()
-            .constraints([
-                Constraint::Length(1),              // Header
-                Constraint::Length(1),              // Header separator
-                Constraint::Min(1),                 // Messages (flex)
-                Constraint::Length(spinner_height),  // Spinner
-                Constraint::Length(input_height),   // Input (dynamic)
-                Constraint::Length(status_height),   // Status bar
-            ])
-            .split(area);
+        let layout = Layout::vertical([
+            Constraint::Length(1),              // Header
+            Constraint::Length(1),              // Header separator
+            Constraint::Min(1),                 // Messages (flex)
+            Constraint::Length(spinner_height),  // Spinner
+            Constraint::Length(input_height),   // Input (dynamic)
+            Constraint::Length(status_height),   // Status bar
+        ]);
+        let [header, header_separator, messages, spinner, input, status_bar] =
+            area.layout(&layout);
 
         Self {
-            header: chunks[0],
-            header_separator: chunks[1],
-            messages: chunks[2],
-            spinner: chunks[3],
-            input: chunks[4],
-            status_bar: chunks[5],
+            header,
+            header_separator,
+            messages,
+            spinner,
+            input,
+            status_bar,
         }
     }
 }
@@ -73,10 +73,10 @@ impl TuiLayout {
 /// `percent_x` is the width as a percentage of the container (0-100).
 /// `height` is the absolute height in rows.
 pub fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let width = area.width * percent_x / 100;
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height.min(area.height))
+    area.centered(
+        Constraint::Percentage(percent_x),
+        Constraint::Length(height),
+    )
 }
 
 /// Calculate a rect anchored to the bottom of the area.
@@ -92,14 +92,12 @@ pub fn bottom_anchored_rect(width: u16, height: u16, area: Rect) -> Rect {
 ///
 /// `left_percent` is 0-100. Returns `(left, right)`.
 pub fn horizontal_split(area: Rect, left_percent: u16) -> (Rect, Rect) {
-    let chunks = Layout::default()
-        .direction(ratatui::layout::Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(left_percent),
-            Constraint::Percentage(100 - left_percent),
-        ])
-        .split(area);
-    (chunks[0], chunks[1])
+    let layout = Layout::horizontal([
+        Constraint::Percentage(left_percent),
+        Constraint::Percentage(100 - left_percent),
+    ]);
+    let [left, right] = area.layout(&layout);
+    (left, right)
 }
 
 #[cfg(test)]

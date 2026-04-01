@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::input::InputMode;
+use crate::theme;
 
 /// A temporary flash message shown in the status bar, auto-dismissed after a timeout.
 #[derive(Clone, Debug)]
@@ -190,21 +191,18 @@ impl<'a> Widget for StatusBarWidget<'a> {
         }
 
         // Fill background
-        let bg = Style::default().bg(Color::Rgb(30, 30, 40)).fg(Color::White);
         for x in area.x..area.x + area.width {
             for y in area.y..area.y + area.height {
-                buf[(x, y)].set_char(' ').set_style(bg);
+                buf[(x, y)].set_char(' ').set_style(theme::STYLE_STATUS);
             }
         }
 
         let sep = Span::styled(
             " \u{2502} ", // " │ "
-            Style::default()
-                .fg(Color::DarkGray)
-                .bg(Color::Rgb(30, 30, 40)),
+            theme::STYLE_STATUS_DARK_GRAY,
         );
         let bg_style = |fg: Color| -> Style {
-            Style::default().fg(fg).bg(Color::Rgb(30, 30, 40))
+            Style::default().fg(fg).bg(theme::STATUS_BG)
         };
 
         // ── Left section ────────────────────────────────────────────────
@@ -267,7 +265,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                 format!("\u{25CF} {}", mode_str), // ● MODE
                 Style::default()
                     .fg(mode_color)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .bg(theme::STATUS_BG)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -279,7 +277,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                 "\u{1F4CB} PLAN", // 📋 PLAN
                 Style::default()
                     .fg(Color::Yellow)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .bg(theme::STATUS_BG)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -300,7 +298,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                 "\u{26A0} RATE LIMITED",
                 Style::default()
                     .fg(Color::Red)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .bg(theme::STATUS_BG)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -314,7 +312,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
                     &flash.text,
                     Style::default()
                         .fg(flash.color())
-                        .bg(Color::Rgb(30, 30, 40))
+                        .bg(theme::STATUS_BG)
                         .add_modifier(Modifier::BOLD),
                 ));
                 right_spans.push(Span::styled(" ", bg_style(Color::Reset)));
