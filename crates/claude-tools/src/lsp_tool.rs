@@ -200,6 +200,11 @@ impl LspTool {
     }
 
     /// Start an LSP server for the given language.
+    ///
+    /// NOTE: The Mutex guard is intentionally held across I/O (process spawn +
+    /// LSP initialize handshake).  This is acceptable because (a) there is no
+    /// concurrent caller contention — tool invocations are serialized, and
+    /// (b) releasing and re-acquiring would create a TOCTOU race on the server map.
     async fn start_server(&self, language: &str, ctx: &ToolUseContext) -> Result<ToolResultData> {
         let mut servers = self.servers.lock().await;
 
@@ -330,6 +335,9 @@ impl LspTool {
     }
 
     /// Stop an LSP server for the given language.
+    ///
+    /// NOTE: Lock held across I/O (shutdown request + exit notification) — see
+    /// [`start_server`](Self::start_server) for rationale.
     async fn stop_server(&self, language: &str) -> Result<ToolResultData> {
         let mut servers = self.servers.lock().await;
 
@@ -376,6 +384,9 @@ impl LspTool {
     }
 
     /// Execute a position-based LSP request (hover, definition, references, completion).
+    ///
+    /// NOTE: Lock held across I/O (JSON-RPC round-trip) — see
+    /// [`start_server`](Self::start_server) for rationale.
     async fn position_request(
         &self,
         language: &str,

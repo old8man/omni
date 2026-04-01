@@ -1,4 +1,7 @@
+use std::sync::LazyLock;
 use std::time::Instant;
+
+use regex::Regex;
 
 const COMPLETION_THRESHOLD: f64 = 0.9;
 const DIMINISHING_THRESHOLD: u64 = 500;
@@ -127,25 +130,32 @@ fn format_number(n: u64) -> String {
     result.chars().rev().collect()
 }
 
+// Token budget parsing regexes — compiled once at first use.
+static RE_BUDGET_START: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*\+(\d+(?:\.\d+)?)\s*(k|m|b)\b").expect("static regex")
+});
+static RE_BUDGET_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s\+(\d+(?:\.\d+)?)\s*(k|m|b)\s*[.!?]?\s*$").expect("static regex")
+});
+static RE_BUDGET_VERBOSE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b")
+        .expect("static regex")
+});
+
 /// Parse a token budget from user text like "+500k", "use 2M tokens", etc.
 pub fn parse_token_budget(text: &str) -> Option<u64> {
-    use regex::Regex;
-
     // Shorthand at start: "+500k"
-    let shorthand_start = Regex::new(r"(?i)^\s*\+(\d+(?:\.\d+)?)\s*(k|m|b)\b").unwrap();
-    if let Some(caps) = shorthand_start.captures(text) {
+    if let Some(caps) = RE_BUDGET_START.captures(text) {
         return Some(parse_budget_match(&caps[1], &caps[2]));
     }
 
     // Shorthand at end: "do the work +500k"
-    let shorthand_end = Regex::new(r"(?i)\s\+(\d+(?:\.\d+)?)\s*(k|m|b)\s*[.!?]?\s*$").unwrap();
-    if let Some(caps) = shorthand_end.captures(text) {
+    if let Some(caps) = RE_BUDGET_END.captures(text) {
         return Some(parse_budget_match(&caps[1], &caps[2]));
     }
 
     // Verbose: "use 500k tokens"
-    let verbose = Regex::new(r"(?i)\b(?:use|spend)\s+(\d+(?:\.\d+)?)\s*(k|m|b)\s*tokens?\b").unwrap();
-    if let Some(caps) = verbose.captures(text) {
+    if let Some(caps) = RE_BUDGET_VERBOSE.captures(text) {
         return Some(parse_budget_match(&caps[1], &caps[2]));
     }
 

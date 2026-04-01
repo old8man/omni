@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use crate::bash_security::{
     self, DestructiveCommandDetector, ReadOnlyValidator, SecurityVerdict,
@@ -425,6 +426,11 @@ fn parse_permission_rule(pattern: &str) -> ParsedRule {
     }
 }
 
+/// Regex for validating subcommand-like tokens (e.g. `run`, `build`, `test-e2e`).
+static RE_SUBCMD: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$").expect("static regex")
+});
+
 /// Extract a stable command prefix (command + subcommand) from a raw command string.
 fn get_simple_command_prefix(command: &str) -> Option<String> {
     let tokens: Vec<&str> = command
@@ -437,8 +443,7 @@ fn get_simple_command_prefix(command: &str) -> Option<String> {
 
     let subcmd = tokens[1];
     // Second token must look like a subcommand.
-    let subcmd_re = regex::Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$").unwrap();
-    if !subcmd_re.is_match(subcmd) {
+    if !RE_SUBCMD.is_match(subcmd) {
         return None;
     }
 

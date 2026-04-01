@@ -133,11 +133,11 @@ impl ReplBridgeHandle {
 
             // Track the UUID for echo deduplication
             if let Some(uuid) = msg.get("uuid").and_then(|u| u.as_str()) {
-                let mut echo_set = self.echo_uuids.lock().unwrap();
+                let mut echo_set = self.echo_uuids.lock().unwrap_or_else(|e| e.into_inner());
                 echo_set.add(uuid.to_string());
 
                 // Track in flushed UUIDs
-                let mut flushed = self.flushed_uuids.lock().unwrap();
+                let mut flushed = self.flushed_uuids.lock().unwrap_or_else(|e| e.into_inner());
                 flushed.insert(uuid.to_string());
             }
 
@@ -150,13 +150,13 @@ impl ReplBridgeHandle {
 
     /// Check if a message UUID is an echo (was sent by us).
     pub fn is_echo(&self, uuid: &str) -> bool {
-        let echo_set = self.echo_uuids.lock().unwrap();
+        let echo_set = self.echo_uuids.lock().unwrap_or_else(|e| e.into_inner());
         echo_set.contains(uuid)
     }
 
     /// Check if a UUID was previously flushed.
     pub fn was_flushed(&self, uuid: &str) -> bool {
-        let flushed = self.flushed_uuids.lock().unwrap();
+        let flushed = self.flushed_uuids.lock().unwrap_or_else(|e| e.into_inner());
         flushed.contains(uuid)
     }
 
@@ -177,7 +177,7 @@ impl ReplBridgeHandle {
 
     /// Clear the echo deduplication set (used on reconnect).
     pub fn clear_echo_set(&self) {
-        let mut echo_set = self.echo_uuids.lock().unwrap();
+        let mut echo_set = self.echo_uuids.lock().unwrap_or_else(|e| e.into_inner());
         echo_set.clear();
     }
 }
@@ -190,13 +190,13 @@ static GLOBAL_HANDLE: Mutex<Option<Arc<ReplBridgeHandle>>> = Mutex::new(None);
 
 /// Set the global REPL bridge handle.
 pub fn set_repl_bridge_handle(handle: Option<Arc<ReplBridgeHandle>>) {
-    let mut global = GLOBAL_HANDLE.lock().unwrap();
+    let mut global = GLOBAL_HANDLE.lock().unwrap_or_else(|e| e.into_inner());
     *global = handle;
 }
 
 /// Get a reference to the global REPL bridge handle.
 pub fn get_repl_bridge_handle() -> Option<Arc<ReplBridgeHandle>> {
-    let global = GLOBAL_HANDLE.lock().unwrap();
+    let global = GLOBAL_HANDLE.lock().unwrap_or_else(|e| e.into_inner());
     global.clone()
 }
 

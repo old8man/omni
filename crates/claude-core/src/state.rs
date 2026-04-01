@@ -474,11 +474,18 @@ impl AppStateStore {
     }
 
     /// Acquire a read lock on the state.
+    ///
+    /// Panics if the RwLock is poisoned. A poisoned lock means a writer panicked
+    /// while holding the lock, leaving AppState in an unknown/inconsistent state.
+    /// Continuing with corrupt state would cause worse failures downstream, so
+    /// panicking immediately is the correct behaviour here.
     pub fn read(&self) -> std::sync::RwLockReadGuard<'_, AppState> {
         self.inner.read().expect("AppState RwLock poisoned (read)")
     }
 
     /// Acquire a write lock on the state.
+    ///
+    /// Panics if the RwLock is poisoned — see [`read`](Self::read) for rationale.
     pub fn write(&self) -> std::sync::RwLockWriteGuard<'_, AppState> {
         self.inner.write().expect("AppState RwLock poisoned (write)")
     }

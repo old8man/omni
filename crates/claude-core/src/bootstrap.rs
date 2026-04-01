@@ -193,7 +193,7 @@ pub async fn initialize(config: BootstrapConfig) -> Result<BootstrapResult> {
         .model
         .clone()
         .or_else(|| settings.model.clone())
-        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+        .unwrap_or_else(|| crate::utils::model::default_opus_model().to_string());
     // Resolve aliases (e.g. "opus" → "claude-opus-4-6-20260401") and validate.
     let model = crate::utils::model::resolve_model_string(&raw_model);
     if let Some(warning) = crate::utils::model::get_model_deprecation_warning(&model) {

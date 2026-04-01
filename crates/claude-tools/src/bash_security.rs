@@ -9,8 +9,171 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use regex::Regex;
+
+// ---------------------------------------------------------------------------
+// Static regexes — compiled once at first use, panics surface at startup.
+// ---------------------------------------------------------------------------
+
+// DestructiveCommandDetector patterns
+static RE_GIT_RESET_HARD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+reset\s+--hard\b").expect("static regex"));
+static RE_GIT_PUSH_FORCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+push\b[^;&|\n]*[ \t](--force|--force-with-lease|-f)\b")
+        .expect("static regex")
+});
+static RE_GIT_CLEAN_F: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f").expect("static regex")
+});
+static RE_GIT_CHECKOUT_DOT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+checkout\s+(--\s+)?\.[ \t]*($|[;&|\n])").expect("static regex")
+});
+static RE_GIT_RESTORE_DOT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+restore\s+(--\s+)?\.[ \t]*($|[;&|\n])").expect("static regex")
+});
+static RE_GIT_STASH_DROP_CLEAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+stash[ \t]+(drop|clear)\b").expect("static regex"));
+static RE_GIT_BRANCH_FORCE_DELETE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+branch\s+(-D[ \t]|--delete\s+--force|--force\s+--delete)\b")
+        .expect("static regex")
+});
+static RE_GIT_NO_VERIFY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b").expect("static regex")
+});
+static RE_GIT_COMMIT_AMEND: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+commit\b[^;&|\n]*--amend\b").expect("static regex"));
+static RE_RM_RF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f|(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+    )
+    .expect("static regex")
+});
+static RE_RM_R: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR]").expect("static regex")
+});
+static RE_RM_F: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f").expect("static regex")
+});
+static RE_DROP_TRUNCATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b").expect("static regex")
+});
+static RE_DELETE_FROM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\bDELETE\s+FROM\s+\w+[ \t]*(;|"|'|\n|$)"#).expect("static regex")
+});
+static RE_KUBECTL_DELETE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bkubectl\s+delete\b").expect("static regex"));
+static RE_TERRAFORM_DESTROY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bterraform\s+destroy\b").expect("static regex"));
+
+// detect() helper patterns
+static RE_GIT_CLEAN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+clean\b").expect("static regex"));
+static RE_FLAG_N: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-[a-zA-Z]*n").expect("static regex"));
+
+// hostname config regex
+static RE_HOSTNAME_ONLY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^hostname(?:\s+(?:-[a-zA-Z]|--[a-zA-Z-]+))*\s*$").expect("static regex")
+});
+
+// SedValidator patterns
+static RE_SED_PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*sed\s+").expect("static regex"));
+static RE_PRINT_CMD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:\d+|\d+,\d+)?p$").expect("static regex"));
+static RE_SUBST_CMD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^s/(.*)$").expect("static regex"));
+static RE_SUBST_FLAGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[gpimIM]*[1-9]?[gpimIM]*$").expect("static regex"));
+static RE_DANGER_FLAGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-e[wWe]|-w[eE]").expect("static regex"));
+static RE_NEGATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[/\d$]!").expect("static regex"));
+static RE_TILDE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d\s*~\s*\d|,\s*~\s*\d|\$\s*~\s*\d").expect("static regex")
+});
+static RE_COMMA_OFFSET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r",\s*[+-]").expect("static regex"));
+static RE_BS_TRICKS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"s\\|\\[|#%@]").expect("static regex"));
+static RE_ESCAPED_SLASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\/.*[wW]").expect("static regex"));
+static RE_SLASH_WS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/[^/]*\s+[wWeE]").expect("static regex"));
+static RE_PROPER_SUBST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^s/[^/]*/[^/]*/[^/]*$").expect("static regex"));
+static RE_Y_CMD: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"y([^\\\n])").expect("static regex"));
+static RE_DANGEROUS_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[wWeE]").expect("static regex"));
+
+// Write-command patterns for contains_dangerous_operations
+static RE_WRITE_BARE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[wW]\s*\S+").expect("static regex"));
+static RE_WRITE_NUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+\s*[wW]\s*\S+").expect("static regex"));
+static RE_WRITE_DOLLAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\$\s*[wW]\s*\S+").expect("static regex"));
+static RE_WRITE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^/[^/]*/[IMim]*\s*[wW]\s*\S+").expect("static regex"));
+static RE_WRITE_RANGE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+,\d+\s*[wW]\s*\S+").expect("static regex"));
+static RE_WRITE_RANGE_DOLLAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+,\$\s*[wW]\s*\S+").expect("static regex"));
+
+// Exec-command patterns for contains_dangerous_operations
+static RE_EXEC_BARE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^e").expect("static regex"));
+static RE_EXEC_NUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+\s*e").expect("static regex"));
+static RE_EXEC_DOLLAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\$\s*e").expect("static regex"));
+static RE_EXEC_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^/[^/]*/[IMim]*\s*e").expect("static regex"));
+static RE_EXEC_RANGE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+,\d+\s*e").expect("static regex"));
+static RE_EXEC_RANGE_DOLLAR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d+,\$\s*e").expect("static regex"));
+
+// validate_command patterns
+static RE_OPERATOR_START: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(&&|\|\||;|>>?|<)").expect("static regex"));
+static RE_IFS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$IFS|\$\{[^}]*IFS").expect("static regex"));
+
+// strip_safe_redirections patterns
+static RE_REDIR_2_TO_1: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+2\s*>&\s*1(?:\s|$)").expect("static regex"));
+static RE_REDIR_DEV_NULL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[012]?\s*>\s*/dev/null(?:\s|$)").expect("static regex"));
+static RE_REDIR_IN_DEV_NULL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*<\s*/dev/null(?:\s|$)").expect("static regex"));
+
+// Command substitution / shell expansion patterns (validate_command)
+static RE_PROC_SUBST_IN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<\(").expect("static regex"));
+static RE_PROC_SUBST_OUT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r">\(").expect("static regex"));
+static RE_ZSH_PROC_SUBST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"=\(").expect("static regex"));
+static RE_CMD_SUBST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\(").expect("static regex"));
+static RE_PARAM_SUBST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{").expect("static regex"));
+static RE_ARITH_SUBST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\[").expect("static regex"));
+static RE_ZSH_PARAM_EXP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"~\[").expect("static regex"));
+static RE_ZSH_GLOB_QUAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(e:").expect("static regex"));
+static RE_ZSH_GLOB_EXEC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(\+").expect("static regex"));
+static RE_ZSH_ALWAYS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\}\s*always\s*\{").expect("static regex"));
+static RE_PS_COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<#").expect("static regex"));
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -44,7 +207,7 @@ pub enum CommandClassification {
 /// Returns a human-readable warning string when a known destructive pattern is
 /// detected. This is informational — it does not block execution on its own.
 pub struct DestructiveCommandDetector {
-    patterns: Vec<(Regex, &'static str)>,
+    patterns: Vec<(&'static LazyLock<Regex>, &'static str)>,
 }
 
 impl Default for DestructiveCommandDetector {
@@ -55,83 +218,53 @@ impl Default for DestructiveCommandDetector {
 
 impl DestructiveCommandDetector {
     pub fn new() -> Self {
-        let patterns: Vec<(Regex, &'static str)> = vec![
+        // References to LazyLock statics — compiled once, reused across all instances.
+        let patterns: Vec<(&'static LazyLock<Regex>, &'static str)> = vec![
             // --- Git — data loss / hard to reverse ---
-            (
-                Regex::new(r"\bgit\s+reset\s+--hard\b").unwrap(),
-                "Note: may discard uncommitted changes",
-            ),
-            (
-                Regex::new(r"\bgit\s+push\b[^;&|\n]*[ \t](--force|--force-with-lease|-f)\b")
-                    .unwrap(),
-                "Note: may overwrite remote history",
-            ),
+            (&RE_GIT_RESET_HARD, "Note: may discard uncommitted changes"),
+            (&RE_GIT_PUSH_FORCE, "Note: may overwrite remote history"),
             (
                 // git clean -f without --dry-run/-n (checked in two steps since
                 // the `regex` crate does not support lookahead assertions)
-                Regex::new(r"\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f").unwrap(),
+                &RE_GIT_CLEAN_F,
                 "Note: may permanently delete untracked files",
             ),
             (
-                Regex::new(r"\bgit\s+checkout\s+(--\s+)?\.[ \t]*($|[;&|\n])").unwrap(),
+                &RE_GIT_CHECKOUT_DOT,
                 "Note: may discard all working tree changes",
             ),
             (
-                Regex::new(r"\bgit\s+restore\s+(--\s+)?\.[ \t]*($|[;&|\n])").unwrap(),
+                &RE_GIT_RESTORE_DOT,
                 "Note: may discard all working tree changes",
             ),
             (
-                Regex::new(r"\bgit\s+stash[ \t]+(drop|clear)\b").unwrap(),
+                &RE_GIT_STASH_DROP_CLEAR,
                 "Note: may permanently remove stashed changes",
             ),
             (
-                Regex::new(
-                    r"\bgit\s+branch\s+(-D[ \t]|--delete\s+--force|--force\s+--delete)\b",
-                )
-                .unwrap(),
+                &RE_GIT_BRANCH_FORCE_DELETE,
                 "Note: may force-delete a branch",
             ),
             // --- Git — safety bypass ---
-            (
-                Regex::new(r"\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b").unwrap(),
-                "Note: may skip safety hooks",
-            ),
-            (
-                Regex::new(r"\bgit\s+commit\b[^;&|\n]*--amend\b").unwrap(),
-                "Note: may rewrite the last commit",
-            ),
+            (&RE_GIT_NO_VERIFY, "Note: may skip safety hooks"),
+            (&RE_GIT_COMMIT_AMEND, "Note: may rewrite the last commit"),
             // --- File deletion ---
-            (
-                Regex::new(
-                    r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f|(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
-                )
-                .unwrap(),
-                "Note: may recursively force-remove files",
-            ),
-            (
-                Regex::new(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR]").unwrap(),
-                "Note: may recursively remove files",
-            ),
-            (
-                Regex::new(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f").unwrap(),
-                "Note: may force-remove files",
-            ),
+            (&RE_RM_RF, "Note: may recursively force-remove files"),
+            (&RE_RM_R, "Note: may recursively remove files"),
+            (&RE_RM_F, "Note: may force-remove files"),
             // --- Database ---
             (
-                Regex::new(r"(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b").unwrap(),
+                &RE_DROP_TRUNCATE,
                 "Note: may drop or truncate database objects",
             ),
             (
-                Regex::new(r#"(?i)\bDELETE\s+FROM\s+\w+[ \t]*(;|"|'|\n|$)"#).unwrap(),
+                &RE_DELETE_FROM,
                 "Note: may delete all rows from a database table",
             ),
             // --- Infrastructure ---
+            (&RE_KUBECTL_DELETE, "Note: may delete Kubernetes resources"),
             (
-                Regex::new(r"\bkubectl\s+delete\b").unwrap(),
-                "Note: may delete Kubernetes resources",
-            ),
-            (
-                Regex::new(r"\bterraform\s+destroy\b").unwrap(),
+                &RE_TERRAFORM_DESTROY,
                 "Note: may destroy Terraform infrastructure",
             ),
         ];
@@ -143,16 +276,8 @@ impl DestructiveCommandDetector {
     /// pattern, or `None` if no match is found.
     pub fn detect(&self, command: &str) -> Option<&'static str> {
         // Pre-check: git clean -f with --dry-run or -n is safe
-        let dry_run_re = regex::Regex::new(r"\bgit\s+clean\b").ok();
-        let has_dry_run = dry_run_re
-            .as_ref()
-            .is_some_and(|re| re.is_match(command))
-            && (command.contains("--dry-run") || {
-                // Check for -n flag (but not as part of a longer flag group after f)
-                regex::Regex::new(r"-[a-zA-Z]*n")
-                    .ok()
-                    .is_some_and(|re| re.is_match(command))
-            });
+        let has_dry_run = RE_GIT_CLEAN.is_match(command)
+            && (command.contains("--dry-run") || RE_FLAG_N.is_match(command));
 
         for (pattern, warning) in &self.patterns {
             if pattern.is_match(command) {
@@ -1779,7 +1904,7 @@ impl ReadOnlyValidator {
                 ("-V", NoArg),
                 ("--version", NoArg),
             ]),
-            regex: Some(Regex::new(r"^hostname(?:\s+(?:-[a-zA-Z]|--[a-zA-Z-]+))*\s*$").unwrap()),
+            regex: Some(RE_HOSTNAME_ONLY.clone()),
             additional_dangerous_check: None,
             respects_double_dash: true,
         }
@@ -1867,12 +1992,11 @@ impl SedValidator {
 
     /// Check if a sed command is a line-printing command (Pattern 1).
     fn is_line_printing_command(command: &str, expressions: &[String]) -> bool {
-        let re = Regex::new(r"^\s*sed\s+").unwrap();
-        if !re.is_match(command) {
+        if !RE_SED_PREFIX.is_match(command) {
             return false;
         }
 
-        let without_sed = re.find(command).map(|m| &command[m.end()..]).unwrap();
+        let without_sed = RE_SED_PREFIX.find(command).map(|m| &command[m.end()..]).unwrap();
         let tokens = shell_tokenize(without_sed);
 
         let flags: Vec<&str> = tokens
@@ -1928,8 +2052,7 @@ impl SedValidator {
         if cmd.is_empty() {
             return false;
         }
-        let re = Regex::new(r"^(?:\d+|\d+,\d+)?p$").unwrap();
-        re.is_match(cmd)
+        RE_PRINT_CMD.is_match(cmd)
     }
 
     /// Check if this is a substitution command (Pattern 2).
@@ -1943,12 +2066,11 @@ impl SedValidator {
             return false;
         }
 
-        let re = Regex::new(r"^\s*sed\s+").unwrap();
-        if !re.is_match(command) {
+        if !RE_SED_PREFIX.is_match(command) {
             return false;
         }
 
-        let without_sed = re.find(command).map(|m| &command[m.end()..]).unwrap();
+        let without_sed = RE_SED_PREFIX.find(command).map(|m| &command[m.end()..]).unwrap();
         let tokens = shell_tokenize(without_sed);
 
         let flags: Vec<&str> = tokens
@@ -1977,8 +2099,7 @@ impl SedValidator {
         }
 
         // Parse substitution: s/pattern/replacement/flags — only / delimiter.
-        let subst_re = Regex::new(r"^s/(.*)$").unwrap();
-        let rest = match subst_re.captures(expr) {
+        let rest = match RE_SUBST_CMD.captures(expr) {
             Some(cap) => cap.get(1).unwrap().as_str().to_string(),
             None => return false,
         };
@@ -2007,8 +2128,7 @@ impl SedValidator {
         let last_pos = last_delimiter_pos.unwrap();
         let expr_flags = &rest[last_pos + 1..];
 
-        let allowed_flag_chars = Regex::new(r"^[gpimIM]*[1-9]?[gpimIM]*$").unwrap();
-        if !allowed_flag_chars.is_match(expr_flags) {
+        if !RE_SUBST_FLAGS.is_match(expr_flags) {
             return false;
         }
 
@@ -2017,12 +2137,11 @@ impl SedValidator {
 
     /// Check if a sed command has file arguments.
     fn has_file_args(command: &str) -> bool {
-        let re = Regex::new(r"^\s*sed\s+").unwrap();
-        if !re.is_match(command) {
+        if !RE_SED_PREFIX.is_match(command) {
             return false;
         }
 
-        let without_sed = re.find(command).map(|m| &command[m.end()..]).unwrap();
+        let without_sed = RE_SED_PREFIX.find(command).map(|m| &command[m.end()..]).unwrap();
         let tokens = shell_tokenize(without_sed);
 
         let mut arg_count = 0;
@@ -2067,16 +2186,14 @@ impl SedValidator {
 
     /// Extract sed expressions from command.
     fn extract_expressions(command: &str) -> Option<Vec<String>> {
-        let re = Regex::new(r"^\s*sed\s+").unwrap();
-        if !re.is_match(command) {
+        if !RE_SED_PREFIX.is_match(command) {
             return Some(Vec::new());
         }
 
-        let without_sed = re.find(command).map(|m| &command[m.end()..]).unwrap();
+        let without_sed = RE_SED_PREFIX.find(command).map(|m| &command[m.end()..]).unwrap();
 
         // Reject dangerous flag combinations
-        let danger_re = Regex::new(r"-e[wWe]|-w[eE]").unwrap();
-        if danger_re.is_match(without_sed) {
+        if RE_DANGER_FLAGS.is_match(without_sed) {
             return None;
         }
 
@@ -2162,14 +2279,12 @@ impl SedValidator {
         if cmd.starts_with('!') {
             return true;
         }
-        let negation_re = Regex::new(r"[/\d$]!").unwrap();
-        if negation_re.is_match(cmd) {
+        if RE_NEGATION.is_match(cmd) {
             return true;
         }
 
         // Reject tilde in GNU step address format
-        let tilde_re = Regex::new(r"\d\s*~\s*\d|,\s*~\s*\d|\$\s*~\s*\d").unwrap();
-        if tilde_re.is_match(cmd) {
+        if RE_TILDE.is_match(cmd) {
             return true;
         }
 
@@ -2179,35 +2294,28 @@ impl SedValidator {
         }
 
         // Reject comma followed by +/-
-        let comma_offset_re = Regex::new(r",\s*[+-]").unwrap();
-        if comma_offset_re.is_match(cmd) {
+        if RE_COMMA_OFFSET.is_match(cmd) {
             return true;
         }
 
         // Reject backslash tricks
-        let bs_tricks_re = Regex::new(r"s\\|\\[|#%@]").unwrap();
-        if bs_tricks_re.is_match(cmd) {
+        if RE_BS_TRICKS.is_match(cmd) {
             return true;
         }
 
         // Reject escaped slashes followed by w/W
-        let escaped_slash_re = Regex::new(r"\\/.*[wW]").unwrap();
-        if escaped_slash_re.is_match(cmd) {
+        if RE_ESCAPED_SLASH.is_match(cmd) {
             return true;
         }
 
         // Reject slash followed by non-slash chars then whitespace then dangerous commands
-        let slash_ws_re = Regex::new(r"/[^/]*\s+[wWeE]").unwrap();
-        if slash_ws_re.is_match(cmd) {
+        if RE_SLASH_WS.is_match(cmd) {
             return true;
         }
 
         // Reject malformed substitution commands
-        if cmd.starts_with("s/") {
-            let proper_re = Regex::new(r"^s/[^/]*/[^/]*/[^/]*$").unwrap();
-            if !proper_re.is_match(cmd) {
-                return true;
-            }
+        if cmd.starts_with("s/") && !RE_PROPER_SUBST.is_match(cmd) {
+            return true;
         }
 
         // Paranoid: reject 's' commands ending with dangerous chars
@@ -2219,30 +2327,30 @@ impl SedValidator {
         }
 
         // Check for dangerous write commands
-        let write_patterns = [
-            Regex::new(r"^[wW]\s*\S+").unwrap(),
-            Regex::new(r"^\d+\s*[wW]\s*\S+").unwrap(),
-            Regex::new(r"^\$\s*[wW]\s*\S+").unwrap(),
-            Regex::new(r"^/[^/]*/[IMim]*\s*[wW]\s*\S+").unwrap(),
-            Regex::new(r"^\d+,\d+\s*[wW]\s*\S+").unwrap(),
-            Regex::new(r"^\d+,\$\s*[wW]\s*\S+").unwrap(),
+        let write_patterns: &[&LazyLock<Regex>] = &[
+            &RE_WRITE_BARE,
+            &RE_WRITE_NUM,
+            &RE_WRITE_DOLLAR,
+            &RE_WRITE_REGEX,
+            &RE_WRITE_RANGE,
+            &RE_WRITE_RANGE_DOLLAR,
         ];
-        for pat in &write_patterns {
+        for pat in write_patterns {
             if pat.is_match(cmd) {
                 return true;
             }
         }
 
         // Check for dangerous execute commands
-        let exec_patterns = [
-            Regex::new(r"^e").unwrap(),
-            Regex::new(r"^\d+\s*e").unwrap(),
-            Regex::new(r"^\$\s*e").unwrap(),
-            Regex::new(r"^/[^/]*/[IMim]*\s*e").unwrap(),
-            Regex::new(r"^\d+,\d+\s*e").unwrap(),
-            Regex::new(r"^\d+,\$\s*e").unwrap(),
+        let exec_patterns: &[&LazyLock<Regex>] = &[
+            &RE_EXEC_BARE,
+            &RE_EXEC_NUM,
+            &RE_EXEC_DOLLAR,
+            &RE_EXEC_REGEX,
+            &RE_EXEC_RANGE,
+            &RE_EXEC_RANGE_DOLLAR,
         ];
-        for pat in &exec_patterns {
+        for pat in exec_patterns {
             if pat.is_match(cmd) {
                 return true;
             }
@@ -2260,8 +2368,7 @@ impl SedValidator {
         }
 
         // Check for y (transliterate) command with dangerous operations
-        let y_cmd_re = Regex::new(r"y([^\\\n])").unwrap();
-        if y_cmd_re.is_match(cmd) && Regex::new(r"[wWeE]").unwrap().is_match(cmd) {
+        if RE_Y_CMD.is_match(cmd) && RE_DANGEROUS_CHARS.is_match(cmd) {
             return true;
         }
 
@@ -2519,8 +2626,7 @@ pub fn validate_command(command: &str, cwd: &Path) -> SecurityVerdict {
     }
 
     // Reject commands that start with an operator (continuation line).
-    let operator_re = Regex::new(r"^\s*(&&|\|\||;|>>?|<)").unwrap();
-    if operator_re.is_match(command) {
+    if RE_OPERATOR_START.is_match(command) {
         return SecurityVerdict::Ask(
             "Command appears to be a continuation line (starts with operator)".to_string(),
         );
@@ -2537,22 +2643,21 @@ pub fn validate_command(command: &str, cwd: &Path) -> SecurityVerdict {
     }
 
     // Check for command substitution patterns.
-    let substitution_patterns: &[(&str, &str)] = &[
-        (r"<\(", "process substitution <()"),
-        (r">\(", "process substitution >()"),
-        (r"=\(", "Zsh process substitution =()"),
-        (r"\$\(", "$() command substitution"),
-        (r"\$\{", "${} parameter substitution"),
-        (r"\$\[", "$[] legacy arithmetic expansion"),
-        (r"~\[", "Zsh-style parameter expansion"),
-        (r"\(e:", "Zsh-style glob qualifiers"),
-        (r"\(\+", "Zsh glob qualifier with command execution"),
-        (r"\}\s*always\s*\{", "Zsh always block"),
-        (r"<#", "PowerShell comment syntax"),
+    let substitution_patterns: &[(&LazyLock<Regex>, &str)] = &[
+        (&RE_PROC_SUBST_IN, "process substitution <()"),
+        (&RE_PROC_SUBST_OUT, "process substitution >()"),
+        (&RE_ZSH_PROC_SUBST, "Zsh process substitution =()"),
+        (&RE_CMD_SUBST, "$() command substitution"),
+        (&RE_PARAM_SUBST, "${} parameter substitution"),
+        (&RE_ARITH_SUBST, "$[] legacy arithmetic expansion"),
+        (&RE_ZSH_PARAM_EXP, "Zsh-style parameter expansion"),
+        (&RE_ZSH_GLOB_QUAL, "Zsh-style glob qualifiers"),
+        (&RE_ZSH_GLOB_EXEC, "Zsh glob qualifier with command execution"),
+        (&RE_ZSH_ALWAYS, "Zsh always block"),
+        (&RE_PS_COMMENT, "PowerShell comment syntax"),
     ];
 
-    for &(pattern, message) in substitution_patterns {
-        let re = Regex::new(pattern).unwrap();
+    for &(re, message) in substitution_patterns {
         if re.is_match(&unquoted) {
             return SecurityVerdict::Ask(format!("Command contains {}", message));
         }
@@ -2575,8 +2680,7 @@ pub fn validate_command(command: &str, cwd: &Path) -> SecurityVerdict {
     }
 
     // Check for IFS injection.
-    let ifs_re = Regex::new(r"\$IFS|\$\{[^}]*IFS").unwrap();
-    if ifs_re.is_match(command) {
+    if RE_IFS.is_match(command) {
         return SecurityVerdict::Ask(
             "Command contains IFS variable usage which could bypass security validation"
                 .to_string(),
@@ -2909,12 +3013,9 @@ fn extract_fully_unquoted_content(command: &str) -> String {
 
 /// Strip safe redirections (2>&1, N>/dev/null, </dev/null).
 fn strip_safe_redirections(content: &str) -> String {
-    let re1 = Regex::new(r"\s+2\s*>&\s*1(?:\s|$)").unwrap();
-    let re2 = Regex::new(r"[012]?\s*>\s*/dev/null(?:\s|$)").unwrap();
-    let re3 = Regex::new(r"\s*<\s*/dev/null(?:\s|$)").unwrap();
-    let s = re1.replace_all(content, " ").to_string();
-    let s = re2.replace_all(&s, "").to_string();
-    re3.replace_all(&s, "").to_string()
+    let s = RE_REDIR_2_TO_1.replace_all(content, " ").to_string();
+    let s = RE_REDIR_DEV_NULL.replace_all(&s, "").to_string();
+    RE_REDIR_IN_DEV_NULL.replace_all(&s, "").to_string()
 }
 
 /// Check for unescaped occurrences of a single character.
