@@ -472,6 +472,11 @@ impl App {
                                 self.message_list.set_search(None);
                                 self.focus.set(FocusTarget::Prompt);
                             }
+                            SearchAction::Accept => {
+                                // Keep scroll position, close search
+                                self.search_overlay.active = false;
+                                self.focus.set(FocusTarget::Prompt);
+                            }
                             SearchAction::None => {}
                         }
                         continue;
@@ -1294,6 +1299,14 @@ impl App {
                 self.selection.extend_to(col, row);
                 self.selection.finalize();
             }
+            MouseAction::RightClick { col, row } => {
+                // Right-click: position cursor at click
+                self.selection.start_at(col, row);
+                self.selection.finalize();
+            }
+            MouseAction::CtrlClick { .. } => {
+                // Ctrl+click: reserved for future use (e.g. open file)
+            }
             MouseAction::None => {}
         }
     }
@@ -1424,6 +1437,73 @@ impl App {
                     && cursor_y < layout.input.y + layout.input.height
                 {
                     frame.set_cursor_position(ratatui::layout::Position::new(cursor_x, cursor_y));
+                }
+            }
+
+            // Completion popup (rendered above input area so it's not clipped)
+            if let Some(ref comp) = prompt.completion {
+                let max_items = comp.items.len().min(10);
+                let popup_height = max_items as u16;
+                // Position popup above the input area
+                let popup_y = layout.input.y.saturating_sub(popup_height);
+                let popup_x = layout.input.x + 2; // align with "> " prefix
+
+                // Compute widths
+                let max_label_w = comp.items.iter().take(max_items)
+                    .map(|item| item.label.len())
+                    .max()
+                    .unwrap_or(10)
+                    .min(30);
+                let max_desc_w = comp.items.iter().take(max_items)
+                    .filter_map(|item| item.description.as_ref())
+                    .map(|d| d.len())
+                    .max()
+                    .unwrap_or(0)
+                    .min(40);
+                let entry_width = (max_label_w + max_desc_w + 3).min(area.width as usize - 4) as u16;
+
+                for (i, item) in comp.items.iter().enumerate().take(max_items) {
+                    let y = popup_y + i as u16;
+                    if y >= layout.input.y {
+                        break;
+                    }
+                    let is_selected = i == comp.selected;
+                    let label_style = if is_selected {
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::Black)
+                            .bg(ratatui::style::Color::Cyan)
+                            .add_modifier(ratatui::style::Modifier::BOLD)
+                    } else {
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::White)
+                            .bg(ratatui::style::Color::Rgb(40, 40, 50))
+                    };
+                    let desc_style = if is_selected {
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::DarkGray)
+                            .bg(ratatui::style::Color::Cyan)
+                    } else {
+                        ratatui::style::Style::default()
+                            .fg(ratatui::style::Color::Gray)
+                            .bg(ratatui::style::Color::Rgb(40, 40, 50))
+                    };
+
+                    let label = format!(" {:<width$}", item.label, width = max_label_w);
+                    let desc = item.description.as_deref()
+                        .map(|d| format!("  {}", d))
+                        .unwrap_or_default();
+                    let pad_len = entry_width as usize - label.len().min(entry_width as usize) - desc.len().min(entry_width as usize);
+                    let padding = " ".repeat(pad_len.min(20));
+
+                    let line = ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(label, label_style),
+                        ratatui::text::Span::styled(desc, desc_style),
+                        ratatui::text::Span::styled(padding, label_style),
+                    ]);
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(line),
+                        ratatui::layout::Rect::new(popup_x, y, entry_width, 1),
+                    );
                 }
             }
 

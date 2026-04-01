@@ -15,8 +15,10 @@ use ratatui::widgets::Widget;
 pub enum SearchAction {
     /// No action needed.
     None,
-    /// Close the search overlay.
+    /// Close the search overlay and restore original scroll position (Esc).
     Close,
+    /// Close the search overlay but keep the current scroll position (Enter).
+    Accept,
     /// Move to the next match.
     NextMatch,
     /// Move to the previous match.
@@ -93,7 +95,9 @@ impl SearchOverlay {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     SearchAction::PreviousMatch
                 } else {
-                    SearchAction::NextMatch
+                    // Plain Enter: close search, keep scroll position at current match
+                    self.close();
+                    SearchAction::Accept
                 }
             }
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {

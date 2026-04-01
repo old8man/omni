@@ -269,6 +269,37 @@ impl PromptInput {
     /// Undo placeholder — full undo stack to be added later.
     pub fn undo(&mut self) {}
 
+    /// Select all text: move cursor to end of last line.
+    /// For Cmd+A on macOS, this selects the full buffer.
+    pub fn select_all(&mut self) {
+        let last_row = self.lines.len().saturating_sub(1);
+        self.cursor = CursorPos::new(last_row, self.lines[last_row].len());
+    }
+
+    /// Paste text from the system clipboard.
+    /// Returns true if paste was successful.
+    pub fn paste_clipboard(&mut self) -> bool {
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        {
+            if let Ok(mut ctx) = copypasta::ClipboardContext::new() {
+                use copypasta::ClipboardProvider;
+                if let Ok(content) = ctx.get_contents() {
+                    self.insert_paste(&content);
+                    return true;
+                }
+            }
+        }
+        let _ = self; // suppress unused warning on other platforms
+        false
+    }
+
+    /// Clear all text in the buffer.
+    pub fn clear_buffer(&mut self) {
+        self.lines = vec![String::new()];
+        self.cursor = CursorPos::new(0, 0);
+        self.completion = None;
+    }
+
     // -----------------------------------------------------------------------
     // Multiline-aware key handler
     // -----------------------------------------------------------------------
@@ -491,7 +522,9 @@ impl PromptInput {
                 .map(|c| c.len_utf8())
                 .unwrap_or(0);
             self.cursor.col -= prev_len;
-            self.lines[self.cursor.row].remove(self.cursor.col);
+            // Remove the full character (may be multi-byte for UTF-8)
+            let end = self.cursor.col + prev_len;
+            self.lines[self.cursor.row].replace_range(self.cursor.col..end, "");
         } else if self.cursor.row > 0 {
             // Join with previous line
             let current = self.lines.remove(self.cursor.row);
@@ -505,7 +538,14 @@ impl PromptInput {
     fn delete_forward(&mut self) {
         let line_len = self.lines[self.cursor.row].len();
         if self.cursor.col < line_len {
-            self.lines[self.cursor.row].remove(self.cursor.col);
+            // Find the length of the character at cursor (may be multi-byte)
+            let char_len = self.lines[self.cursor.row][self.cursor.col..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+            let end = (self.cursor.col + char_len).min(line_len);
+            self.lines[self.cursor.row].replace_range(self.cursor.col..end, "");
         } else if self.cursor.row + 1 < self.lines.len() {
             // Join next line into current
             let next = self.lines.remove(self.cursor.row + 1);
@@ -1168,54 +1208,8 @@ impl<'a> Widget for PromptInputWidget<'a> {
             buf.set_line(inner.x, y, &line, inner.width);
         }
 
-        // ----- Completion popup -----
-        if let Some(ref comp) = self.input.completion {
-            // Render completion popup below the current cursor line
-            let popup_y = inner.y
-                + (self.input.cursor.row.saturating_sub(scroll_offset) as u16)
-                + 1;
-            let popup_x = inner.x + prompt_width + comp.token_start as u16;
-            let max_items = comp.items.len().min(8);
-            let max_label_width = comp
-                .items
-                .iter()
-                .take(max_items)
-                .map(|item| item.label.len())
-                .max()
-                .unwrap_or(10)
-                .min(content_width);
-
-            for (i, item) in comp.items.iter().enumerate().take(max_items) {
-                let y = popup_y + i as u16;
-                if y >= inner.y + inner.height {
-                    break;
-                }
-                let style = if i == comp.selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::White).bg(Color::DarkGray)
-                };
-                let label = format!("{:<width$}", item.label, width = max_label_width);
-                let desc = item
-                    .description
-                    .as_deref()
-                    .map(|d| format!(" {}", d))
-                    .unwrap_or_default();
-                let entry_line = Line::from(vec![
-                    Span::styled(label, style),
-                    Span::styled(
-                        desc,
-                        if i == comp.selected {
-                            Style::default().fg(Color::DarkGray).bg(Color::Cyan)
-                        } else {
-                            Style::default().fg(Color::Gray).bg(Color::DarkGray)
-                        },
-                    ),
-                ]);
-                let entry_width = (max_label_width + 20).min(inner.width as usize) as u16;
-                buf.set_line(popup_x.min(inner.x + inner.width - 1), y, &entry_line, entry_width);
-            }
-        }
+        // NOTE: Completion popup is rendered in app.rs above the input area
+        // so it doesn't get clipped by the small input widget bounds.
     }
 }
 

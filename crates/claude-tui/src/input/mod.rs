@@ -332,6 +332,21 @@ impl InputHandler {
                 self.vim_state.enter_insert();
                 InputResult::Consumed
             }
+            NormalAction::OpenLine { below } => {
+                let text = prompt.text();
+                let cursor = prompt.cursor();
+                if below {
+                    let eol = vim::end_of_line_offset(&text, cursor);
+                    prompt.insert_str_at(eol, "\n");
+                    prompt.set_cursor(eol + 1);
+                } else {
+                    let sol = vim::start_of_line_offset(&text, cursor);
+                    prompt.insert_str_at(sol, "\n");
+                    prompt.set_cursor(sol);
+                }
+                self.vim_state.enter_insert();
+                InputResult::Consumed
+            }
             NormalAction::EnterVisual(anchor) => {
                 self.vim_state.enter_visual(anchor);
                 InputResult::Consumed

@@ -100,18 +100,20 @@ fn syn_font_to_modifier(fs: FontStyle) -> Modifier {
 }
 
 /// Highlight a single line of code and return a vector of styled [`Span`]s.
+///
+/// The `highlight_state` is carried across lines so that multi-line constructs
+/// (e.g. block comments, heredocs) are highlighted correctly.
 fn highlight_line_spans(
     line: &str,
     _syntax: &SyntaxReference,
-    state: &mut syntect::parsing::ParseState,
+    parse_state: &mut syntect::parsing::ParseState,
+    highlight_state: &mut HighlightState,
     highlighter: &syntect::highlighting::Highlighter<'_>,
 ) -> Vec<Span<'static>> {
     let ss = syntax_set();
-    let ops = state.parse_line(line, ss).unwrap_or_default();
-    let mut highlight_state =
-        HighlightState::new(highlighter, syntect::parsing::ScopeStack::new());
+    let ops = parse_state.parse_line(line, ss).unwrap_or_default();
     let styled = syntect::highlighting::HighlightIterator::new(
-        &mut highlight_state,
+        highlight_state,
         &ops,
         line,
         highlighter,
@@ -157,10 +159,18 @@ pub fn highlight_code_block(lang: &str, code: &str) -> Vec<Line<'static>> {
 
     let highlighter = syntect::highlighting::Highlighter::new(theme());
     let mut parse_state = syntect::parsing::ParseState::new(syntax);
+    let mut highlight_state =
+        HighlightState::new(&highlighter, syntect::parsing::ScopeStack::new());
     let mut lines = Vec::new();
 
     for line in code.lines() {
-        let spans = highlight_line_spans(line, syntax, &mut parse_state, &highlighter);
+        let spans = highlight_line_spans(
+            line,
+            syntax,
+            &mut parse_state,
+            &mut highlight_state,
+            &highlighter,
+        );
         if spans.is_empty() {
             lines.push(Line::from(Span::raw(String::new())));
         } else {

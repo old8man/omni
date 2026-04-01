@@ -288,6 +288,35 @@ impl MessageList {
         }
     }
 
+    /// The current search focus index (for overlay display).
+    pub fn search_focus_index(&self) -> usize {
+        self.search_focus
+    }
+
+    /// Scroll so the message at the given index is roughly visible.
+    /// Uses a heuristic: estimate ~3 lines per message.
+    pub fn scroll_to_message(&mut self, msg_idx: usize) {
+        let estimated_line = msg_idx.saturating_mul(3);
+        self.scroll_offset = estimated_line;
+        self.sticky_bottom = false;
+    }
+
+    /// Save current scroll position (for restoring after search cancel).
+    pub fn save_scroll_position(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Restore a previously saved scroll position.
+    pub fn restore_scroll_position(&mut self, offset: usize) {
+        self.scroll_offset = offset;
+        self.sticky_bottom = false;
+    }
+
+    /// Return the message index of the current focused search match, if any.
+    pub fn current_search_match_message(&self) -> Option<usize> {
+        self.search_matches.get(self.search_focus).copied()
+    }
+
     /// Recompute which message indices match the search query.
     fn update_search_matches(&mut self) {
         self.search_matches.clear();

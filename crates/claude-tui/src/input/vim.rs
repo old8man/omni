@@ -228,6 +228,8 @@ pub enum NormalAction {
     Change { from: usize, to: usize },
     /// Yank text in range [from, to).
     Yank { from: usize, to: usize, linewise: bool },
+    /// Open a new line above or below the current line and enter insert mode.
+    OpenLine { below: bool },
     /// Replace character at offset.
     ReplaceChar { offset: usize, ch: char },
     /// Paste register content.
@@ -374,6 +376,16 @@ fn start_of_line(text: &str, pos: usize) -> usize {
 
 fn end_of_line(text: &str, pos: usize) -> usize {
     text[pos..].find('\n').map_or(text.len(), |i| pos + i)
+}
+
+/// Public accessor for `start_of_line` (used by `InputHandler` for `o`/`O`).
+pub fn start_of_line_offset(text: &str, pos: usize) -> usize {
+    start_of_line(text, pos)
+}
+
+/// Public accessor for `end_of_line` (used by `InputHandler` for `o`/`O`).
+pub fn end_of_line_offset(text: &str, pos: usize) -> usize {
+    end_of_line(text, pos)
 }
 
 fn first_non_blank(text: &str, pos: usize) -> usize {
@@ -990,14 +1002,12 @@ fn handle_normal_input(
         'o' => {
             state.persistent.last_change = Some(RecordedChange::OpenLine { below: true });
             state.command = CommandState::Idle;
-            let eol = end_of_line(text, cursor);
-            Some(NormalAction::EnterInsert(eol))
+            Some(NormalAction::OpenLine { below: true })
         }
         'O' => {
             state.persistent.last_change = Some(RecordedChange::OpenLine { below: false });
             state.command = CommandState::Idle;
-            let sol = start_of_line(text, cursor);
-            Some(NormalAction::EnterInsert(sol))
+            Some(NormalAction::OpenLine { below: false })
         }
         'v' => {
             state.command = CommandState::Idle;

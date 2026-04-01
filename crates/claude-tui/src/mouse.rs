@@ -15,6 +15,10 @@ pub enum MouseAction {
     /// Click at a position in the message area — could start a selection or
     /// focus a panel.
     Click { col: u16, row: u16 },
+    /// Right-click at a position — opens context menu or copies selected text.
+    RightClick { col: u16, row: u16 },
+    /// Ctrl+Click — copy selected text (macOS-friendly alternative).
+    CtrlClick { col: u16, row: u16 },
     /// Scroll up by the given number of lines.
     ScrollUp(u16),
     /// Scroll down by the given number of lines.
@@ -28,7 +32,22 @@ pub enum MouseAction {
 /// Translate a crossterm [`MouseEvent`] into a [`MouseAction`].
 pub fn translate_mouse_event(event: MouseEvent) -> MouseAction {
     match event.kind {
-        MouseEventKind::Down(MouseButton::Left) => MouseAction::Click {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                || event.modifiers.contains(crossterm::event::KeyModifiers::SUPER)
+            {
+                MouseAction::CtrlClick {
+                    col: event.column,
+                    row: event.row,
+                }
+            } else {
+                MouseAction::Click {
+                    col: event.column,
+                    row: event.row,
+                }
+            }
+        }
+        MouseEventKind::Down(MouseButton::Right) => MouseAction::RightClick {
             col: event.column,
             row: event.row,
         },
