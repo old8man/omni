@@ -62,8 +62,11 @@ impl RetryPolicy {
                     }
                 }
             }
-            // 429 – rate-limited, 500/502/503/504 – transient server errors.
-            429 | 500 | 502 | 503 | 504 => {
+            // 429 – rate-limited: do NOT retry (matches original Claude Code behavior).
+            // The user needs to wait or switch plans.
+            429 => RetryDecision::Fatal { status },
+            // 500/502/503/504 – transient server errors: retry with backoff.
+            500 | 502 | 503 | 504 => {
                 if attempt >= self.max_retries {
                     RetryDecision::Fatal { status }
                 } else {
@@ -79,7 +82,7 @@ impl RetryPolicy {
 
     /// Return whether a given HTTP status code is retryable at all.
     pub fn is_retryable(status: u16) -> bool {
-        matches!(status, 429 | 500 | 502 | 503 | 504 | 529)
+        matches!(status, 500 | 502 | 503 | 504 | 529)
     }
 
     /// Resolve the delay: prefer the `retry-after` header when present,
