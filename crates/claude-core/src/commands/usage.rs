@@ -15,7 +15,7 @@ impl Command for UsageCommand {
     }
 
     fn aliases(&self) -> &[&str] {
-        &["cost"]
+        &[]
     }
 
     fn description(&self) -> &str {

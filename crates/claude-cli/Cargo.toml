@@ -21,3 +21,12 @@ serde_json.workspace = true
 uuid.workspace = true
 hostname = "0.4"
 chrono.workspace = true
+
+[features]
+default = ["claude-core/default", "claude-tools/default", "claude-tui/default"]
+bridge = ["claude-core/bridge", "claude-tools/bridge", "claude-tui/bridge"]
+voice = ["claude-core/voice", "claude-tools/voice", "claude-tui/voice"]
+coordinator = ["claude-core/coordinator", "claude-tools/coordinator", "claude-tui/coordinator"]
+buddy = ["claude-core/buddy", "claude-tools/buddy", "claude-tui/buddy"]
+kairos = ["claude-core/kairos", "claude-tools/kairos", "claude-tui/kairos"]
+computer-use = ["claude-core/computer-use", "claude-tools/computer-use", "claude-tui/computer-use"]

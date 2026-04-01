@@ -16,7 +16,7 @@ pub struct HookContext {
     pub query_source: String,
     /// Agent ID, if this is a subagent query.
     pub agent_id: Option<String>,
-    /// Query chain tracking (chain_id + depth) for analytics.
+    /// Query chain tracking (chain_id + depth) for conversation continuity.
     pub tracking: QueryTracking,
 }
 

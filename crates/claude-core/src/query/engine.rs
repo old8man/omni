@@ -75,7 +75,7 @@ pub struct QueryEngine {
     /// execution with model generation).
     tool_call_fn: Option<ToolCallFn>,
     // ── Query tracking ─────────────────────────────────────────────────────
-    /// Chain ID + depth for analytics. Persists across the entire conversation.
+    /// Chain ID + depth for conversation tracking. Persists across the entire conversation.
     tracking: QueryTracking,
     /// Agent ID for subagent queries (None for main thread).
     agent_id: Option<String>,
@@ -270,6 +270,11 @@ impl QueryEngine {
             "role": "assistant",
             "content": content,
         }));
+    }
+
+    /// Add a pre-built message (used when restoring a session).
+    pub fn add_raw_message(&mut self, message: serde_json::Value) {
+        self.messages.push(message);
     }
 
     /// Add synthetic error tool_result blocks for orphaned tool_use blocks.

@@ -485,7 +485,9 @@ impl CostTracker {
 
     /// Snapshot current cost state for persistence.
     pub fn snapshot(&self) -> StoredCostState {
-        let inner = self.inner.lock().expect("cost tracker mutex poisoned");
+        let Ok(inner) = self.inner.lock() else {
+            return StoredCostState::default();
+        };
         StoredCostState {
             total_cost_usd: inner.total_cost_usd,
             total_api_duration_ms: inner.total_api_duration.as_millis() as f64,

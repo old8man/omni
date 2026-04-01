@@ -56,8 +56,7 @@ pub fn detect_terminal() -> Option<String> {
 
 /// Send a notification using the specified channel.
 ///
-/// Returns the name of the method that was actually used, mirroring the TS
-/// implementation's analytics contract.
+/// Returns the name of the method that was actually used.
 pub fn send_notification(
     opts: &NotificationOptions,
     channel: &NotificationChannel,

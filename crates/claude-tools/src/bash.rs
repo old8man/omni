@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::bash_security::{self, SecurityVerdict};
 use crate::registry::{ProgressSender, ToolExecutor, ToolUseContext};
 use claude_core::types::events::ToolResultData;
 
@@ -75,6 +76,40 @@ impl ToolExecutor for BashTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing 'command' field"))?
             .to_string();
+
+        // --- Security validation ---
+        // Run security checks before executing any command. This catches
+        // structurally dangerous patterns (command substitution, IFS injection,
+        // dangerous Zsh builtins, etc.) and dangerous rm/rmdir targets.
+        let security_verdict = bash_security::validate_command(&command, &ctx.working_directory);
+        match security_verdict {
+            SecurityVerdict::Deny(reason) => {
+                return Ok(ToolResultData {
+                    data: json!({
+                        "stdout": "",
+                        "stderr": format!("Command blocked: {}", reason),
+                        "code": -1,
+                        "interrupted": false
+                    }),
+                    is_error: true,
+                });
+            }
+            SecurityVerdict::Ask(reason) => {
+                // In a full implementation the Ask verdict would be surfaced to
+                // the permission UI. For now we report it as a tool error so
+                // the model (and user) sees the warning.
+                return Ok(ToolResultData {
+                    data: json!({
+                        "stdout": "",
+                        "stderr": format!("Command requires approval: {}", reason),
+                        "code": -1,
+                        "interrupted": false
+                    }),
+                    is_error: true,
+                });
+            }
+            SecurityVerdict::Allow => { /* proceed */ }
+        }
 
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
 
@@ -193,8 +228,8 @@ impl ToolExecutor for BashTool {
 
         // Foreground execution with timeout and cancellation support
         // Take pipes before any select so we can read them after wait
-        let mut stdout_pipe = child.stdout.take().expect("stdout pipe");
-        let mut stderr_pipe = child.stderr.take().expect("stderr pipe");
+        let mut stdout_pipe = child.stdout.take().ok_or_else(|| anyhow::anyhow!("stdout pipe not available"))?;
+        let mut stderr_pipe = child.stderr.take().ok_or_else(|| anyhow::anyhow!("stderr pipe not available"))?;
 
         let timeout_duration = std::time::Duration::from_millis(timeout_ms);
 
@@ -262,8 +297,22 @@ impl ToolExecutor for BashTool {
         false
     }
 
-    fn is_read_only(&self, _input: &Value) -> bool {
-        false
+    fn is_read_only(&self, input: &Value) -> bool {
+        if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
+            let classifier = bash_security::CommandClassifier::new();
+            classifier.classify(command) == bash_security::CommandClassification::ReadOnly
+        } else {
+            false
+        }
+    }
+
+    fn is_destructive(&self, input: &Value) -> bool {
+        if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
+            let classifier = bash_security::CommandClassifier::new();
+            classifier.classify(command) == bash_security::CommandClassification::Destructive
+        } else {
+            false
+        }
     }
 
     fn max_result_size_chars(&self) -> usize {

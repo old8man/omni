@@ -38,7 +38,7 @@ pub struct CategoryStats {
 /// Tracks diagnostic events and errors during a session.
 ///
 /// Thread-safe: all state is behind a Mutex. Intended as a lightweight
-/// in-process event log for debugging and telemetry.
+/// in-process event log for debugging and diagnostics.
 pub struct DiagnosticTracker {
     inner: Arc<Mutex<TrackerInner>>,
 }

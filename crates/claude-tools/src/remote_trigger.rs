@@ -25,13 +25,14 @@ impl Default for RemoteTriggerTool {
 
 impl RemoteTriggerTool {
     /// Create a new `RemoteTriggerTool`.
+    ///
+    /// Falls back to a default client if the builder fails (e.g. TLS unavailable).
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
-                .build()
-                .unwrap_or_default(),
-        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { client }
     }
 }
 
@@ -139,7 +140,12 @@ impl ToolExecutor for RemoteTriggerTool {
         let mut request = match method {
             "GET" => self.client.get(&url),
             "POST" => self.client.post(&url),
-            _ => unreachable!(),
+            other => {
+                return Ok(ToolResultData {
+                    data: json!({ "error": format!("Unsupported HTTP method: '{}'", other) }),
+                    is_error: true,
+                });
+            }
         };
 
         request = request

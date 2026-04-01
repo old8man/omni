@@ -6,7 +6,7 @@ use serde_json::Value;
 /// Transport type for MCP server connections.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum McpTransport {
+pub enum McpTransportType {
     #[default]
     Stdio,
     Sse,
@@ -18,12 +18,12 @@ pub enum McpTransport {
 }
 
 /// Configuration for a single MCP server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     /// Transport type (defaults to stdio).
     #[serde(rename = "type", default)]
-    pub transport: McpTransport,
+    pub transport: McpTransportType,
 
     /// Command to spawn for stdio transport.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +52,27 @@ pub struct McpServerConfig {
     /// IDE name for sse-ide / ws-ide transports.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ide_name: Option<String>,
+
+    /// OAuth configuration for SSE/HTTP servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpOAuthConfig>,
+}
+
+/// OAuth configuration for an MCP server that supports OAuth 2.0.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthConfig {
+    /// OAuth client ID (if pre-registered).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+
+    /// Preferred local port for the OAuth callback redirect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<u16>,
+
+    /// Explicit authorization server metadata URL (must be https).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_server_metadata_url: Option<String>,
 }
 
 /// Scope from which an MCP server config was loaded.

@@ -90,11 +90,43 @@ async fn main() -> Result<()> {
     // Handle subcommands that don't need full bootstrap
     match &cli.command {
         Some(SubCommand::Login) => {
-            println!("Login not yet implemented");
+            eprintln!("\x1b[1mClaude Code — Login\x1b[0m");
+
+            // Check if already logged in
+            if let Some(existing) = claude_core::auth::storage::load_tokens().await? {
+                if !claude_core::auth::pkce::is_token_expired(existing.expires_at) {
+                    eprintln!();
+                    eprintln!("  You are already logged in.");
+                    eprintln!("  Run \x1b[1mclaude logout\x1b[0m first to switch accounts.");
+                    return Ok(());
+                }
+            }
+
+            // Run the full PKCE OAuth flow (opens browser, waits for callback)
+            let result = claude_core::auth::pkce::run_oauth_login(true).await?;
+
+            // Store tokens securely
+            claude_core::auth::storage::store_tokens(&result.tokens).await?;
+
+            eprintln!("\x1b[32m  Login successful!\x1b[0m");
+            eprintln!();
+            if claude_core::auth::oauth_config::has_inference_scope(&result.tokens.scopes) {
+                eprintln!("  Authenticated with Claude.ai (subscriber).");
+            } else {
+                eprintln!("  Authenticated with Anthropic Console.");
+            }
+            eprintln!("  Credentials stored securely.");
             return Ok(());
         }
         Some(SubCommand::Logout) => {
-            println!("Logout not yet implemented");
+            eprintln!("\x1b[1mClaude Code — Logout\x1b[0m");
+
+            // Delete stored credentials (file + keychain)
+            claude_core::auth::storage::delete_tokens().await?;
+
+            eprintln!();
+            eprintln!("  \x1b[32mLogged out successfully.\x1b[0m");
+            eprintln!("  Stored credentials have been removed.");
             return Ok(());
         }
         Some(SubCommand::RemoteControl {
@@ -102,74 +134,79 @@ async fn main() -> Result<()> {
             spawn_mode,
             session_id,
         }) => {
-            use claude_core::bridge::types::{BridgeConfig, SpawnMode};
+            #[cfg(feature = "bridge")]
+            {
+                use claude_core::bridge::types::{BridgeConfig, SpawnMode};
 
-            let cwd = cli
-                .working_dir
-                .clone()
-                .map(Ok)
-                .unwrap_or_else(std::env::current_dir)?;
-            let mode = match spawn_mode.as_str() {
-                "worktree" => SpawnMode::Worktree,
-                "same-dir" => SpawnMode::SameDir,
-                _ => SpawnMode::SingleSession,
-            };
+                let cwd = cli
+                    .working_dir
+                    .clone()
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_dir)?;
+                let mode = match spawn_mode.as_str() {
+                    "worktree" => SpawnMode::Worktree,
+                    "same-dir" => SpawnMode::SameDir,
+                    _ => SpawnMode::SingleSession,
+                };
 
-            // Detect git info
-            let branch = std::process::Command::new("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_default();
+                // Detect git info
+                let branch = std::process::Command::new("git")
+                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default();
 
-            let git_repo_url = std::process::Command::new("git")
-                .args(["remote", "get-url", "origin"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+                let git_repo_url = std::process::Command::new("git")
+                    .args(["remote", "get-url", "origin"])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
-            let hostname = hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
+                let hostname = hostname::get()
+                    .map(|h| h.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string());
 
-            let config = BridgeConfig {
-                dir: cwd.to_string_lossy().to_string(),
-                machine_name: hostname,
-                branch,
-                git_repo_url,
-                max_sessions: *max_sessions,
-                spawn_mode: mode,
-                verbose: cli.verbose,
-                sandbox: false,
-                bridge_id: uuid::Uuid::new_v4().to_string(),
-                worker_type: "claude_code".to_string(),
-                environment_id: uuid::Uuid::new_v4().to_string(),
-                reuse_environment_id: None,
-                api_base_url: "https://api.anthropic.com".to_string(),
-                session_ingress_url: "https://api.anthropic.com".to_string(),
-                debug_file: None,
-                session_timeout_ms: None,
-            };
+                let config = BridgeConfig {
+                    dir: cwd.to_string_lossy().to_string(),
+                    machine_name: hostname,
+                    branch,
+                    git_repo_url,
+                    max_sessions: *max_sessions,
+                    spawn_mode: mode,
+                    verbose: cli.verbose,
+                    sandbox: false,
+                    bridge_id: uuid::Uuid::new_v4().to_string(),
+                    worker_type: "claude_code".to_string(),
+                    environment_id: uuid::Uuid::new_v4().to_string(),
+                    reuse_environment_id: None,
+                    api_base_url: "https://api.anthropic.com".to_string(),
+                    session_ingress_url: "https://api.anthropic.com".to_string(),
+                    debug_file: None,
+                    session_timeout_ms: None,
+                };
 
-            eprintln!("Remote Control bridge mode");
-            eprintln!("  Directory: {}", config.dir);
-            eprintln!("  Branch: {}", config.branch);
-            eprintln!("  Max sessions: {}", config.max_sessions);
-            eprintln!("  Spawn mode: {:?}", config.spawn_mode);
-            if let Some(sid) = session_id {
-                eprintln!("  Resuming session: {sid}");
+                eprintln!("Remote Control bridge mode");
+                eprintln!("  Directory: {}", config.dir);
+                eprintln!("  Branch: {}", config.branch);
+                eprintln!("  Max sessions: {}", config.max_sessions);
+                eprintln!("  Spawn mode: {:?}", config.spawn_mode);
+                if let Some(sid) = session_id {
+                    eprintln!("  Resuming session: {sid}");
+                }
+
+                eprintln!(
+                    "\nBridge configured. Use `claude login` first, then connect via claude.ai/code."
+                );
             }
 
-            // The full bridge main loop requires OAuth auth and session spawning
-            // infrastructure. Print config and exit for now — the bridge_main_loop
-            // function is fully implemented and ready to wire up when the auth
-            // and session runner layers are integrated.
-            eprintln!(
-                "\nBridge configured. Use `claude login` first, then connect via claude.ai/code."
-            );
+            #[cfg(not(feature = "bridge"))]
+            {
+                let _ = (max_sessions, spawn_mode, session_id);
+                eprintln!("Bridge mode is not compiled in. Rebuild with `--features bridge`.");
+            }
 
             return Ok(());
         }
@@ -230,6 +267,7 @@ async fn main() -> Result<()> {
 
     let auth = match auth_resolution {
         AuthResolution::ApiKey(auth) => auth,
+        AuthResolution::OAuthToken(auth) => auth,
         AuthResolution::OAuthProxy => {
             claude_core::api::client::AuthMethod::ApiKey("proxy".into())
         }
@@ -260,11 +298,15 @@ async fn main() -> Result<()> {
     // Initialize LSP manager (servers are lazily started when configs are provided)
     let lsp_manager = claude_core::services::LspManager::new();
 
-    // Activate assistant mode if enabled
-    let mut assistant_state = claude_core::assistant::AssistantState::default();
-    if state_store.is_assistant_mode() {
-        claude_core::assistant::activate_kairos(&mut assistant_state);
-    }
+    // Activate assistant mode if enabled (requires kairos feature)
+    #[cfg(feature = "kairos")]
+    let assistant_state = {
+        let mut state = claude_core::assistant::AssistantState::default();
+        if state_store.is_assistant_mode() {
+            claude_core::assistant::activate_kairos(&mut state);
+        }
+        state
+    };
 
     // Build tool registry
     let tools = claude_tools::build_default_registry();
@@ -291,8 +333,10 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // Append assistant-mode addendum if active
+    // Append assistant-mode addendum if active (requires kairos feature)
+    #[allow(unused_mut)]
     let mut system_prompt_values = system_prompt_values;
+    #[cfg(feature = "kairos")]
     if assistant_state.is_active() {
         let addendum = claude_core::assistant::get_assistant_system_prompt_addendum();
         system_prompt_values.push(serde_json::json!({"type": "text", "text": addendum}));
@@ -368,7 +412,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         use claude_core::permissions::evaluator::evaluate_permission_sync;
-        use claude_core::permissions::types::{PermissionDecision, ToolPermissionContext};
+        use claude_core::permissions::types::{PermissionBehavior, ToolPermissionContext};
         use claude_core::query::engine::TurnResult;
         use claude_core::types::events::StreamEvent;
         use claude_tools::ToolUseContext;
@@ -477,8 +521,8 @@ async fn main() -> Result<()> {
                             is_read_only,
                         );
 
-                        let (result_text, is_error) = match decision {
-                            PermissionDecision::Allow | PermissionDecision::Ask { .. } => {
+                        let (result_text, is_error) = match decision.behavior {
+                            PermissionBehavior::Allow | PermissionBehavior::Ask => {
                                 // In non-interactive mode, auto-allow (user passed a prompt)
                                 let executor = tools.get(&tool_info.name);
                                 match executor {
@@ -503,7 +547,8 @@ async fn main() -> Result<()> {
                                     None => (format!("Unknown tool: {}", tool_info.name), true),
                                 }
                             }
-                            PermissionDecision::Deny { message } => {
+                            PermissionBehavior::Deny => {
+                                let message = decision.message.unwrap_or_else(|| "Denied".to_string());
                                 (format!("Permission denied: {}", message), true)
                             }
                         };

@@ -1,6 +1,10 @@
+pub mod auth;
 pub mod client;
 pub mod config;
+pub mod env_expansion;
 pub mod manager;
+pub mod permissions;
+pub mod transport;
 /// MCP (Model Context Protocol) integration.
 pub mod types;
 
@@ -10,6 +14,6 @@ pub use config::{
 };
 pub use manager::{McpManager, McpToolDescriptor};
 pub use types::{
-    McpCapabilities, McpResource, McpServerConfig, McpServerState, McpServerStatus, McpTool,
-    ServerResource,
+    McpCapabilities, McpOAuthConfig, McpResource, McpServerConfig, McpServerState,
+    McpServerStatus, McpTool, McpTransportType, ServerResource,
 };

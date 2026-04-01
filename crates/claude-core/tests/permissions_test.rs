@@ -8,7 +8,7 @@ fn test_bypass_mode_always_allows() {
         ..Default::default()
     };
     let decision = evaluate_permission_sync("Bash", &serde_json::json!({}), &ctx, false);
-    assert!(matches!(decision, PermissionDecision::Allow));
+    assert_eq!(decision.behavior, PermissionBehavior::Allow);
 }
 
 #[test]
@@ -18,7 +18,7 @@ fn test_default_mode_allows_readonly() {
         ..Default::default()
     };
     let decision = evaluate_permission_sync("Read", &serde_json::json!({}), &ctx, true);
-    assert!(matches!(decision, PermissionDecision::Allow));
+    assert_eq!(decision.behavior, PermissionBehavior::Allow);
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn test_default_mode_asks_for_write() {
         ..Default::default()
     };
     let decision = evaluate_permission_sync("Bash", &serde_json::json!({}), &ctx, false);
-    assert!(matches!(decision, PermissionDecision::Ask { .. }));
+    assert_eq!(decision.behavior, PermissionBehavior::Ask);
 }
 
 #[test]
@@ -36,14 +36,10 @@ fn test_deny_rule_blocks() {
     let mut ctx = ToolPermissionContext::default();
     ctx.deny_rules.insert(
         "manual".into(),
-        vec![PermissionRule {
-            tool: "Bash".into(),
-            pattern: None,
-            mode: None,
-        }],
+        vec!["Bash".to_string()],
     );
     let decision = evaluate_permission_sync("Bash", &serde_json::json!({}), &ctx, false);
-    assert!(matches!(decision, PermissionDecision::Deny { .. }));
+    assert_eq!(decision.behavior, PermissionBehavior::Deny);
 }
 
 #[test]
@@ -52,14 +48,10 @@ fn test_allow_rule_permits() {
     ctx.mode = PermissionMode::Default;
     ctx.allow_rules.insert(
         "manual".into(),
-        vec![PermissionRule {
-            tool: "Bash".into(),
-            pattern: None,
-            mode: None,
-        }],
+        vec!["Bash".to_string()],
     );
     let decision = evaluate_permission_sync("Bash", &serde_json::json!({}), &ctx, false);
-    assert!(matches!(decision, PermissionDecision::Allow));
+    assert_eq!(decision.behavior, PermissionBehavior::Allow);
 }
 
 #[test]
@@ -67,12 +59,8 @@ fn test_wildcard_deny_rule() {
     let mut ctx = ToolPermissionContext::default();
     ctx.deny_rules.insert(
         "manual".into(),
-        vec![PermissionRule {
-            tool: "*".into(),
-            pattern: None,
-            mode: None,
-        }],
+        vec!["*".to_string()],
     );
     let decision = evaluate_permission_sync("Read", &serde_json::json!({}), &ctx, true);
-    assert!(matches!(decision, PermissionDecision::Deny { .. }));
+    assert_eq!(decision.behavior, PermissionBehavior::Deny);
 }

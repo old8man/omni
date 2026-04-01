@@ -86,18 +86,18 @@ impl BridgeApiClient {
         base_url: String,
         get_access_token: Arc<dyn Fn() -> Option<String> + Send + Sync>,
         runner_version: String,
-    ) -> Self {
+    ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .build()
-            .expect("failed to build reqwest client");
-        Self {
+            .context("failed to build reqwest client")?;
+        Ok(Self {
             http,
             base_url,
             get_access_token,
             runner_version,
             on_auth_401: None,
-        }
+        })
     }
 
     /// Set a callback invoked on 401 to attempt OAuth token refresh.

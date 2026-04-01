@@ -1,6 +1,8 @@
 pub mod agent_tool;
 pub mod ask_user;
 pub mod bash;
+pub mod bash_permissions;
+pub mod bash_security;
 pub mod brief_tool;
 pub mod config_tool;
 pub mod edit;

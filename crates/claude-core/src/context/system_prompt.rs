@@ -52,7 +52,7 @@ pub async fn build_system_prompt(
 /// Build the complete system prompt as an array of content blocks.
 ///
 /// Mirrors the original TypeScript `getSystemPrompt()` in constants/prompts.ts.
-/// All feature-gated sections are always enabled (no GrowthBook / entitlement checks).
+/// All feature-gated sections are always enabled.
 pub async fn build_system_prompt_full(
     project_root: &Path,
     model: &str,

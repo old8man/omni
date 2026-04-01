@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use claude_core::commands::{CommandContext, CommandRegistry, CommandResult};
 use claude_core::permissions::evaluator::evaluate_permission_sync;
-use claude_core::permissions::types::{PermissionDecision, PermissionMode, ToolPermissionContext};
+use claude_core::permissions::types::{PermissionBehavior, PermissionMode, ToolPermissionContext};
 use claude_core::query::engine::{QueryEngine, ToolUseInfo, TurnResult};
 use claude_core::services::lsp_service::LspManager;
 use claude_core::services::notifications::{self, NotificationChannel, NotificationOptions};
@@ -548,9 +548,85 @@ impl App {
                                     self.engine_busy = false;
                                 }
                                 CommandResult::ResumeSession(id) => {
-                                    self.message_list.push(MessageEntry::System {
-                                        text: format!("Resume session: {} (not yet wired)", id),
-                                    });
+                                    let cwd_str = cwd.to_string_lossy().to_string();
+                                    let project_dir =
+                                        claude_core::session::SessionManager::project_dir_for_cwd(
+                                            &cwd_str,
+                                        );
+                                    let mgr =
+                                        claude_core::session::SessionManager::new(project_dir);
+                                    match mgr.load_session(&id) {
+                                        Ok(session) => {
+                                            // Restore messages into the engine
+                                            engine.clear_messages();
+                                            for msg in &session.messages {
+                                                engine.add_raw_message(msg.clone());
+                                            }
+                                            self.message_list.clear();
+                                            self.message_list.push(MessageEntry::System {
+                                                text: format!(
+                                                    "Resumed session {} ({} messages)",
+                                                    id,
+                                                    session.messages.len()
+                                                ),
+                                            });
+                                            // Re-display prior conversation messages
+                                            for msg in &session.messages {
+                                                if let Some(role) =
+                                                    msg.get("role").and_then(|v| v.as_str())
+                                                {
+                                                    let text = msg
+                                                        .get("content")
+                                                        .and_then(|c| {
+                                                            if let Some(s) = c.as_str() {
+                                                                Some(s.to_string())
+                                                            } else if let Some(arr) = c.as_array() {
+                                                                Some(
+                                                                    arr.iter()
+                                                                        .filter_map(|b| {
+                                                                            b.get("text")
+                                                                                .and_then(|v| {
+                                                                                    v.as_str()
+                                                                                })
+                                                                                .map(String::from)
+                                                                        })
+                                                                        .collect::<Vec<_>>()
+                                                                        .join("\n"),
+                                                                )
+                                                            } else {
+                                                                None
+                                                            }
+                                                        })
+                                                        .unwrap_or_default();
+                                                    match role {
+                                                        "user" => {
+                                                            self.message_list.push(
+                                                                MessageEntry::User {
+                                                                    text: text.clone(),
+                                                                },
+                                                            );
+                                                        }
+                                                        "assistant" => {
+                                                            self.message_list.push(
+                                                                MessageEntry::Assistant {
+                                                                    text: text.clone(),
+                                                                },
+                                                            );
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.message_list.push(MessageEntry::System {
+                                                text: format!(
+                                                    "Failed to resume session {}: {}",
+                                                    id, e
+                                                ),
+                                            });
+                                        }
+                                    }
                                 }
                                 CommandResult::TogglePlanMode => {
                                     self.plan_mode = !self.plan_mode;
@@ -884,10 +960,9 @@ impl App {
             let decision =
                 evaluate_permission_sync(&info.name, &info.input, perm_ctx, is_read_only);
 
-            match decision {
-                PermissionDecision::Allow => {
-                    // Auto-execute: we need to send an event to trigger execution
-                    // For simplicity, send an "allow" permission response immediately
+            match decision.behavior {
+                PermissionBehavior::Allow => {
+                    // Auto-execute: send an "allow" permission response immediately
                     let tx2 = tx.clone();
                     tokio::spawn(async move {
                         let _ = tx2
@@ -895,7 +970,8 @@ impl App {
                             .await;
                     });
                 }
-                PermissionDecision::Ask { message } => {
+                PermissionBehavior::Ask => {
+                    let message = decision.message.unwrap_or_else(|| "Permission required".to_string());
                     let input_preview = serde_json::to_string_pretty(&info.input)
                         .unwrap_or_else(|_| info.input.to_string());
                     self.permission_dialog = Some(PermissionDialog::new(
@@ -904,7 +980,8 @@ impl App {
                         input_preview,
                     ));
                 }
-                PermissionDecision::Deny { message } => {
+                PermissionBehavior::Deny => {
+                    let message = decision.message.unwrap_or_else(|| "Denied".to_string());
                     // Auto-deny, send deny response
                     let tx2 = tx.clone();
                     tokio::spawn(async move {

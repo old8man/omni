@@ -51,12 +51,12 @@ pub struct BridgeSessionInfo {
 }
 
 /// Build standard headers for session API calls.
-fn session_headers(access_token: &str, org_uuid: &str) -> HeaderMap {
+fn session_headers(access_token: &str, org_uuid: &str) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {access_token}"))
-            .expect("token contains invalid header chars"),
+            .map_err(|e| anyhow::anyhow!("token contains invalid header chars: {e}"))?,
     );
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
@@ -68,7 +68,7 @@ fn session_headers(access_token: &str, org_uuid: &str) -> HeaderMap {
         "x-organization-uuid",
         HeaderValue::from_str(org_uuid).unwrap_or_else(|_| HeaderValue::from_static("")),
     );
-    headers
+    Ok(headers)
 }
 
 /// Create a session on a bridge environment via `POST /v1/sessions`.
@@ -101,7 +101,7 @@ pub async fn create_bridge_session(opts: &CreateSessionOptions) -> Result<Option
     }
 
     let url = format!("{}/v1/sessions", opts.base_url);
-    let headers = session_headers(&opts.access_token, &opts.org_uuid);
+    let headers = session_headers(&opts.access_token, &opts.org_uuid)?;
 
     let resp = http
         .post(&url)
@@ -145,7 +145,7 @@ pub async fn get_bridge_session(
         .context("failed to build HTTP client")?;
 
     let url = format!("{base_url}/v1/sessions/{session_id}");
-    let headers = session_headers(access_token, org_uuid);
+    let headers = session_headers(access_token, org_uuid)?;
 
     let resp = http
         .get(&url)
@@ -180,7 +180,7 @@ pub async fn archive_bridge_session(
         .context("failed to build HTTP client")?;
 
     let url = format!("{base_url}/v1/sessions/{session_id}/archive");
-    let headers = session_headers(access_token, org_uuid);
+    let headers = session_headers(access_token, org_uuid)?;
 
     let resp = http
         .post(&url)
@@ -216,7 +216,7 @@ pub async fn update_bridge_session_title(
         .context("failed to build HTTP client")?;
 
     let url = format!("{base_url}/v1/sessions/{session_id}");
-    let headers = session_headers(access_token, org_uuid);
+    let headers = session_headers(access_token, org_uuid)?;
 
     let resp = http
         .patch(&url)

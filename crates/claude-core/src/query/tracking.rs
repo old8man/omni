@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-/// Per-query chain tracking for analytics and telemetry.
+/// Per-query chain tracking for conversation continuity.
 ///
 /// `chain_id` is a UUID that stays the same for an entire conversation.
 /// `depth` increments each turn within the conversation.

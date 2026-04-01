@@ -16,8 +16,18 @@ reqwest.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 glob = "0.3"
 dirs = "6"
+regex = "1"
 libc = "0.2"
 base64 = "0.22"
+
+[features]
+default = ["claude-core/default"]
+bridge = ["claude-core/bridge"]
+voice = ["claude-core/voice"]
+coordinator = ["claude-core/coordinator"]
+buddy = ["claude-core/buddy"]
+kairos = ["claude-core/kairos"]
+computer-use = ["claude-core/computer-use"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -20,5 +20,14 @@ unicode-segmentation = "1"
 htmlescape = "0.3"
 copypasta = { version = "0.10", default-features = false, features = ["wayland", "x11"] }
 
+[features]
+default = ["claude-core/default"]
+bridge = ["claude-core/bridge"]
+voice = ["claude-core/voice"]
+coordinator = ["claude-core/coordinator"]
+buddy = ["claude-core/buddy"]
+kairos = ["claude-core/kairos"]
+computer-use = ["claude-core/computer-use"]
+
 [dev-dependencies]
 tempfile = "3"
