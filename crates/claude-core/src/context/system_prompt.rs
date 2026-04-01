@@ -28,6 +28,14 @@ pub const DEFAULT_AGENT_PROMPT: &str = "You are an agent for Claude Code, Anthro
     complete the task, respond with a concise report covering what was done and any key \
     findings — the caller will relay this to the user, so it only needs the essentials.";
 
+/// Build the attribution header that identifies this as a Claude Code request.
+/// Must be the first block in the system prompt for proper billing/rate limits.
+fn build_attribution_header() -> String {
+    let version = "2.1.89";
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").unwrap_or_else(|_| "cli".to_string());
+    format!("x-anthropic-billing-header: cc_version={version}; cc_entrypoint={entrypoint};")
+}
+
 /// Simplified entry point for backward compatibility.
 ///
 /// Accepts the old 2-arg call signature used by the CLI and tests.
@@ -61,8 +69,12 @@ pub async fn build_system_prompt_full(
     mcp_instructions: Option<&str>,
     language_preference: Option<&str>,
 ) -> Result<Vec<Value>> {
-    // --- Static content (cacheable) ---
+    // --- Attribution header (required for Claude Code billing/rate limits) ---
+    // This must be the FIRST system prompt block, matching the original Claude Code.
+    let attribution = build_attribution_header();
+
     let mut sections: Vec<String> = vec![
+        attribution,
         get_intro_section(),
         get_system_section(),
         get_doing_tasks_section(),
