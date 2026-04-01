@@ -390,7 +390,7 @@ impl App {
                 AppEvent::Key(k) => {
                     // --- Global shortcuts that always apply ---
 
-                    // Ctrl+C: cancel current request (if running), else quit
+                    // Ctrl+C: cancel current request, or hint to use Ctrl+D
                     if matches!(
                         (k.modifiers, k.code),
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
@@ -403,9 +403,15 @@ impl App {
                                 text: "Interrupted.".to_string(),
                                 severity: SystemSeverity::Warning,
                             });
+                        } else if !self.prompt.is_empty() {
+                            // Clear current input (like bash Ctrl+C)
+                            self.prompt.clear();
                         } else {
-                            cancel.cancel();
-                            self.should_quit = true;
+                            // Empty input, no request — hint user
+                            self.message_list.push(MessageEntry::System {
+                                text: "Press Ctrl+D to quit, or type a message.".to_string(),
+                                severity: SystemSeverity::Info,
+                            });
                         }
                         continue;
                     }
@@ -1410,7 +1416,17 @@ impl App {
         }
 
         match (key.modifiers, key.code) {
-            (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                // In standalone mode (no engine), Ctrl+C clears input or hints
+                if !self.prompt.is_empty() {
+                    self.prompt.clear();
+                } else {
+                    self.message_list.push(MessageEntry::System {
+                        text: "Press Ctrl+D to quit.".to_string(),
+                        severity: SystemSeverity::Info,
+                    });
+                }
+            }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 if self.prompt.is_empty() {
                     self.should_quit = true;

@@ -105,7 +105,7 @@ impl<'a> Widget for WelcomeWidget<'a> {
             Line::from(vec![
                 Span::styled("  • ", Style::default().fg(Color::Cyan)),
                 Span::styled("Ctrl+C", key_style),
-                Span::styled("   — cancel request", desc_style),
+                Span::styled("   — cancel request / clear input", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("  • ", Style::default().fg(Color::Cyan)),

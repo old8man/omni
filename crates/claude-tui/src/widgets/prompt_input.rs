@@ -203,6 +203,14 @@ impl PromptInput {
         self.lines.len() == 1 && self.lines[0].is_empty()
     }
 
+    /// Clear the input buffer and reset cursor.
+    pub fn clear(&mut self) {
+        self.lines = vec![String::new()];
+        self.cursor = CursorPos::new(0, 0);
+        self.history_index = None;
+        self.completion = None;
+    }
+
     /// Access to history entries.
     pub fn history(&self) -> &[String] {
         &self.history
