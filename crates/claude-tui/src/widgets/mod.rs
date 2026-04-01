@@ -8,3 +8,4 @@ pub mod prompt_input;
 pub mod search_overlay;
 pub mod spinner;
 pub mod status_bar;
+pub mod welcome;

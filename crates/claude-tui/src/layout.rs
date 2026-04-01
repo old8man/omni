@@ -1,65 +1,76 @@
 //! Layout helpers for the TUI.
 //!
 //! Provides a [`TuiLayout`] that computes the main layout regions (header,
-//! messages, spinner, input, status bar) and a helper for centered overlay
-//! dialogs.
+//! messages, spinner, input, status bar) and helpers for overlay dialogs.
+//! The input area grows with content up to 40% of terminal height.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 
 /// Regions of the main TUI layout.
 pub struct TuiLayout {
-    /// Top decorative border.
-    pub top_border: Rect,
-    /// Header line (app name, model, tokens).
+    /// Header line (product name, model, session info).
     pub header: Rect,
     /// Separator below header.
     pub header_separator: Rect,
-    /// Main message/conversation area.
+    /// Main message/conversation area (scrollable with virtual scroll).
     pub messages: Rect,
-    /// Spinner area (zero height when inactive).
+    /// Spinner area (zero height when inactive, grows for sub-spinners).
     pub spinner: Rect,
-    /// Prompt input area.
+    /// Prompt input area (grows with content, min 3 lines, max 40% terminal).
     pub input: Rect,
-    /// Status bar at the bottom.
+    /// Status bar at the very bottom (full width, colored background).
     pub status_bar: Rect,
 }
 
 impl TuiLayout {
     /// Compute the layout regions for the given terminal area.
     ///
-    /// `spinner_active` controls whether the spinner row gets a non-zero height.
-    /// `show_status_bar` controls whether the bottom status bar is shown.
-    pub fn compute(area: Rect, spinner_active: bool, show_status_bar: bool) -> Self {
-        let spinner_height = if spinner_active { 1 } else { 0 };
+    /// - `spinner_height`: number of rows for the spinner (0 when inactive,
+    ///   1 for single spinner, more for parallel sub-spinners).
+    /// - `input_line_count`: number of content lines in the input area (for
+    ///   dynamic growth). The input will be at least 3 rows and at most 40%
+    ///   of the terminal height.
+    /// - `show_status_bar`: whether to display the bottom status bar.
+    pub fn compute(
+        area: Rect,
+        spinner_height: u16,
+        input_line_count: u16,
+        show_status_bar: bool,
+    ) -> Self {
         let status_height = if show_status_bar { 1 } else { 0 };
+
+        // Input area: minimum 3 rows (border + 1 line + border), grows with
+        // content, capped at 40% of terminal height.
+        let max_input_height = (area.height as f32 * 0.4) as u16;
+        // +2 for top/bottom border of the input block
+        let desired_input = (input_line_count + 2).max(3);
+        let input_height = desired_input.min(max_input_height).max(3);
 
         let chunks = Layout::default()
             .constraints([
-                Constraint::Length(1),              // Top border
                 Constraint::Length(1),              // Header
                 Constraint::Length(1),              // Header separator
-                Constraint::Min(1),                 // Messages
+                Constraint::Min(1),                 // Messages (flex)
                 Constraint::Length(spinner_height),  // Spinner
-                Constraint::Length(3),              // Input (with top border)
+                Constraint::Length(input_height),   // Input (dynamic)
                 Constraint::Length(status_height),   // Status bar
             ])
             .split(area);
 
         Self {
-            top_border: chunks[0],
-            header: chunks[1],
-            header_separator: chunks[2],
-            messages: chunks[3],
-            spinner: chunks[4],
-            input: chunks[5],
-            status_bar: chunks[6],
+            header: chunks[0],
+            header_separator: chunks[1],
+            messages: chunks[2],
+            spinner: chunks[3],
+            input: chunks[4],
+            status_bar: chunks[5],
         }
     }
 }
 
 /// Calculate a centered rect within the given area.
 ///
-/// `percent_x` is the width as a percentage of the container (0–100).
+/// `percent_x` is the width as a percentage of the container (0-100).
 /// `height` is the absolute height in rows.
 pub fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
     let width = area.width * percent_x / 100;
@@ -79,7 +90,7 @@ pub fn bottom_anchored_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 /// Split a rect horizontally into left and right panes at the given ratio.
 ///
-/// `left_percent` is 0–100. Returns `(left, right)`.
+/// `left_percent` is 0-100. Returns `(left, right)`.
 pub fn horizontal_split(area: Rect, left_percent: u16) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(ratatui::layout::Direction::Horizontal)
@@ -98,13 +109,12 @@ mod tests {
     #[test]
     fn test_tui_layout_basic() {
         let area = Rect::new(0, 0, 80, 24);
-        let layout = TuiLayout::compute(area, false, true);
+        let layout = TuiLayout::compute(area, 0, 1, true);
 
-        assert_eq!(layout.top_border.height, 1);
         assert_eq!(layout.header.height, 1);
         assert_eq!(layout.header_separator.height, 1);
         assert_eq!(layout.spinner.height, 0);
-        assert_eq!(layout.input.height, 3);
+        assert!(layout.input.height >= 3);
         assert_eq!(layout.status_bar.height, 1);
         // Messages get the rest
         assert!(layout.messages.height > 0);
@@ -113,15 +123,40 @@ mod tests {
     #[test]
     fn test_tui_layout_with_spinner() {
         let area = Rect::new(0, 0, 80, 24);
-        let layout = TuiLayout::compute(area, true, true);
+        let layout = TuiLayout::compute(area, 1, 1, true);
         assert_eq!(layout.spinner.height, 1);
+    }
+
+    #[test]
+    fn test_tui_layout_multi_spinner() {
+        let area = Rect::new(0, 0, 80, 24);
+        let layout = TuiLayout::compute(area, 3, 1, true);
+        assert_eq!(layout.spinner.height, 3);
     }
 
     #[test]
     fn test_tui_layout_no_status_bar() {
         let area = Rect::new(0, 0, 80, 24);
-        let layout = TuiLayout::compute(area, false, false);
+        let layout = TuiLayout::compute(area, 0, 1, false);
         assert_eq!(layout.status_bar.height, 0);
+    }
+
+    #[test]
+    fn test_tui_layout_input_grows() {
+        let area = Rect::new(0, 0, 80, 40);
+        // 10 lines of input content -> 12 rows (+ borders)
+        let layout = TuiLayout::compute(area, 0, 10, true);
+        assert!(layout.input.height >= 10);
+        // But capped at 40% of 40 = 16
+        assert!(layout.input.height <= 16);
+    }
+
+    #[test]
+    fn test_tui_layout_input_max_cap() {
+        let area = Rect::new(0, 0, 80, 24);
+        // Many lines but capped at 40% of 24 ≈ 9
+        let layout = TuiLayout::compute(area, 0, 30, true);
+        assert!(layout.input.height <= 10); // 40% of 24 ≈ 9.6
     }
 
     #[test]

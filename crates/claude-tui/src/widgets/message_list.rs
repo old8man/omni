@@ -122,6 +122,8 @@ pub struct MessageList {
     expanded: std::collections::HashSet<usize>,
     /// Whether the assistant is currently streaming.
     streaming: bool,
+    /// Compact mode: collapse tool outputs and thinking blocks.
+    compact_mode: bool,
 }
 
 impl MessageList {
@@ -137,7 +139,18 @@ impl MessageList {
             spinner_frame: 0,
             expanded: std::collections::HashSet::new(),
             streaming: false,
+            compact_mode: false,
         }
+    }
+
+    /// Toggle compact transcript view mode.
+    pub fn toggle_compact_mode(&mut self) {
+        self.compact_mode = !self.compact_mode;
+    }
+
+    /// Whether compact mode is active.
+    pub fn compact_mode(&self) -> bool {
+        self.compact_mode
     }
 
     /// Append a message to the list.

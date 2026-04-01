@@ -1,8 +1,9 @@
 //! Notification popup widget for transient messages.
 //!
-//! Renders a small popup at the top of the screen that auto-dismisses
-//! after a configurable duration.  Supports info, success, warning,
-//! and error severity levels with appropriate coloring.
+//! Renders toast notifications at the top-right corner of the screen.
+//! Auto-dismisses after a configurable duration (default 3s).
+//! Supports info, success, warning, and error severity levels.
+//! Stacks up to 3 notifications.
 
 use std::time::{Duration, Instant};
 
@@ -15,13 +16,13 @@ use ratatui::widgets::Widget;
 /// Notification severity level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotificationLevel {
-    /// Informational message.
+    /// Informational message (blue).
     Info,
-    /// Success confirmation.
+    /// Success confirmation (green).
     Success,
-    /// Warning.
+    /// Warning (yellow).
     Warning,
-    /// Error.
+    /// Error (red).
     Error,
 }
 
@@ -29,7 +30,7 @@ impl NotificationLevel {
     /// Return the color associated with this level.
     fn color(self) -> Color {
         match self {
-            Self::Info => Color::Cyan,
+            Self::Info => Color::Blue,
             Self::Success => Color::Green,
             Self::Warning => Color::Yellow,
             Self::Error => Color::Red,
@@ -39,10 +40,20 @@ impl NotificationLevel {
     /// Return the icon associated with this level.
     fn icon(self) -> &'static str {
         match self {
-            Self::Info => "\u{2139}",    // ℹ
-            Self::Success => "\u{2714}", // ✔
-            Self::Warning => "\u{26A0}", // ⚠
-            Self::Error => "\u{2718}",   // ✘
+            Self::Info => "\u{2139}\u{FE0F}",    // ℹ️
+            Self::Success => "\u{2714}",          // ✔
+            Self::Warning => "\u{26A0}\u{FE0F}",  // ⚠️
+            Self::Error => "\u{2718}",            // ✘
+        }
+    }
+
+    /// Return the label for this level.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Info => "INFO",
+            Self::Success => "OK",
+            Self::Warning => "WARN",
+            Self::Error => "ERROR",
         }
     }
 }
@@ -80,6 +91,8 @@ pub struct NotificationManager {
     notifications: Vec<Notification>,
     /// Maximum number of simultaneous notifications.
     max_visible: usize,
+    /// Default duration for new notifications.
+    default_duration: Duration,
 }
 
 impl NotificationManager {
@@ -88,12 +101,18 @@ impl NotificationManager {
         Self {
             notifications: Vec::new(),
             max_visible: 3,
+            default_duration: Duration::from_secs(3),
         }
     }
 
-    /// Push a new notification.
+    /// Set the default auto-dismiss duration.
+    pub fn set_default_duration(&mut self, duration: Duration) {
+        self.default_duration = duration;
+    }
+
+    /// Push a new notification with the default duration.
     pub fn push(&mut self, message: String, level: NotificationLevel) {
-        self.push_with_duration(message, level, Duration::from_secs(3));
+        self.push_with_duration(message, level, self.default_duration);
     }
 
     /// Push a new notification with a custom duration.
@@ -109,6 +128,10 @@ impl NotificationManager {
             created_at: Instant::now(),
             duration,
         });
+        // Trim old notifications if we have too many total
+        while self.notifications.len() > self.max_visible * 2 {
+            self.notifications.remove(0);
+        }
     }
 
     /// Remove expired notifications.
@@ -116,7 +139,7 @@ impl NotificationManager {
         self.notifications.retain(|n| !n.is_expired());
     }
 
-    /// Get the currently visible notifications.
+    /// Get the currently visible notifications (most recent, up to max_visible).
     pub fn visible(&self) -> &[Notification] {
         let start = self.notifications.len().saturating_sub(self.max_visible);
         &self.notifications[start..]
@@ -139,7 +162,7 @@ impl Default for NotificationManager {
     }
 }
 
-/// Widget that renders notification popups.
+/// Widget that renders notification popups at the top-right corner.
 pub struct NotificationWidget<'a> {
     manager: &'a NotificationManager,
 }
@@ -170,16 +193,25 @@ impl<'a> Widget for NotificationWidget<'a> {
 
             let color = notif.level.color();
             let icon = notif.level.icon();
+            let label = notif.level.label();
 
-            // Calculate notification width
-            let msg_width = notif.message.len() + 4; // icon + spaces + message
-            let notif_width = msg_width.min(area.width as usize);
+            // Calculate notification width: " ICON LABEL: message "
+            let content = format!(" {} {}: {} ", icon, label, notif.message);
+            let notif_width = content.len().min(area.width as usize);
             let x = area.x + area.width.saturating_sub(notif_width as u16);
 
-            // Background fill
-            let bg_style = Style::default().bg(Color::Rgb(30, 30, 30)).fg(Color::White);
+            // Background fill for the notification area
+            let bg_color = Color::Rgb(30, 30, 30);
+            let bg_style = Style::default().bg(bg_color).fg(Color::White);
             for col in x..area.x + area.width {
                 buf[(col, y)].set_char(' ').set_style(bg_style);
+            }
+
+            // Left accent bar
+            if x < area.x + area.width {
+                buf[(x, y)]
+                    .set_char('\u{2588}') // █
+                    .set_style(Style::default().fg(color).bg(bg_color));
             }
 
             // Render content
@@ -188,17 +220,30 @@ impl<'a> Widget for NotificationWidget<'a> {
                     format!(" {} ", icon),
                     Style::default()
                         .fg(color)
-                        .bg(Color::Rgb(30, 30, 30))
+                        .bg(bg_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{}: ", label),
+                    Style::default()
+                        .fg(color)
+                        .bg(bg_color)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     notif.message.clone(),
-                    Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 30)),
+                    Style::default().fg(Color::White).bg(bg_color),
                 ),
-                Span::styled(" ", Style::default().bg(Color::Rgb(30, 30, 30))),
+                Span::styled(" ", Style::default().bg(bg_color)),
             ]);
 
-            buf.set_line(x, y, &line, area.width.saturating_sub(x - area.x));
+            let render_x = x + 1; // after accent bar
+            buf.set_line(
+                render_x,
+                y,
+                &line,
+                area.width.saturating_sub(render_x - area.x),
+            );
         }
     }
 }
@@ -238,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_notification_level_colors() {
-        assert_eq!(NotificationLevel::Info.color(), Color::Cyan);
+        assert_eq!(NotificationLevel::Info.color(), Color::Blue);
         assert_eq!(NotificationLevel::Error.color(), Color::Red);
         assert_eq!(NotificationLevel::Success.color(), Color::Green);
         assert_eq!(NotificationLevel::Warning.color(), Color::Yellow);
@@ -250,5 +295,13 @@ mod tests {
         mgr.push("test".to_string(), NotificationLevel::Info);
         mgr.clear();
         assert!(mgr.visible().is_empty());
+    }
+
+    #[test]
+    fn test_custom_default_duration() {
+        let mut mgr = NotificationManager::new();
+        mgr.set_default_duration(Duration::from_secs(10));
+        mgr.push("long".to_string(), NotificationLevel::Warning);
+        assert_eq!(mgr.visible()[0].duration, Duration::from_secs(10));
     }
 }

@@ -10,7 +10,7 @@ use crossterm::event::{
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
@@ -28,6 +28,7 @@ use claude_core::services::tool_use_summary::{self, ToolInfo as SummaryToolInfo}
 use claude_core::types::events::{StreamEvent, ToolResultData};
 use claude_tools::{ToolRegistry, ToolUseContext};
 
+use crate::input::{InputHandler, InputMode, InputResult};
 use crate::mouse::{translate_mouse_event, FocusManager, FocusTarget, MouseAction, TextSelection};
 use crate::theme::{detect_theme, Theme};
 use crate::widgets::message_list::{
@@ -37,7 +38,9 @@ use crate::widgets::notification::{NotificationManager, NotificationWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
 use crate::widgets::search_overlay::{SearchAction, SearchOverlay, SearchOverlayWidget};
-use crate::widgets::spinner::{SpinnerMode, SpinnerState};
+use crate::widgets::spinner::{SpinnerMode, SpinnerState, SPINNER_TICK_MS};
+use crate::widgets::status_bar::{StatusBarState, StatusBarWidget};
+use crate::widgets::welcome::{WelcomeState, WelcomeWidget};
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -67,6 +70,8 @@ pub struct App {
     should_quit: bool,
     message_list: MessageList,
     prompt: PromptInput,
+    /// Input handler (vim mode + emacs mode routing)
+    input_handler: InputHandler,
     permission_dialog: Option<PermissionDialog>,
     /// True while the engine is processing (prevents double-submit)
     engine_busy: bool,
@@ -115,6 +120,7 @@ impl App {
             should_quit: false,
             message_list: MessageList::new(),
             prompt: PromptInput::new(),
+            input_handler: InputHandler::new(),
             permission_dialog: None,
             engine_busy: false,
             model_name: "claude-sonnet-4-6".to_string(),
@@ -200,7 +206,7 @@ impl App {
         // Spawn spinner tick (50ms)
         let tx_spinner = tx.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            let mut interval = tokio::time::interval(Duration::from_millis(SPINNER_TICK_MS));
             loop {
                 interval.tick().await;
                 if tx_spinner.send(AppEvent::SpinnerTick).await.is_err() {
@@ -288,7 +294,7 @@ impl App {
         // Spawn spinner tick (50ms)
         let tx_spinner = tx.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            let mut interval = tokio::time::interval(Duration::from_millis(SPINNER_TICK_MS));
             loop {
                 interval.tick().await;
                 if tx_spinner.send(AppEvent::SpinnerTick).await.is_err() {
@@ -371,19 +377,51 @@ impl App {
                     self.should_quit = true;
                 }
                 AppEvent::Key(k) => {
-                    // Ctrl+C / Ctrl+D always quits
+                    // --- Global shortcuts that always apply ---
+
+                    // Ctrl+C: cancel current request (if running), else quit
                     if matches!(
                         (k.modifiers, k.code),
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
-                            | (KeyModifiers::CONTROL, KeyCode::Char('d'))
                     ) {
-                        cancel.cancel();
-                        self.should_quit = true;
+                        if self.engine_busy {
+                            cancel.cancel();
+                            self.spinner.stop();
+                            self.engine_busy = false;
+                            self.message_list.push(MessageEntry::System {
+                                text: "Interrupted.".to_string(),
+                                severity: SystemSeverity::Warning,
+                            });
+                        } else {
+                            cancel.cancel();
+                            self.should_quit = true;
+                        }
                         continue;
                     }
 
+                    // Ctrl+D: quit only on empty input
+                    if matches!(
+                        (k.modifiers, k.code),
+                        (KeyModifiers::CONTROL, KeyCode::Char('d'))
+                    ) {
+                        if self.prompt.is_empty() {
+                            cancel.cancel();
+                            self.should_quit = true;
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+L: clear screen (redraw)
+                    if matches!(
+                        (k.modifiers, k.code),
+                        (KeyModifiers::CONTROL, KeyCode::Char('l'))
+                    ) {
+                        self.terminal.clear()?;
+                        continue;
+                    }
+
+                    // --- Permission dialog routing ---
                     if self.permission_dialog.is_some() {
-                        // Route keys to permission dialog
                         match k.code {
                             KeyCode::Tab | KeyCode::Right => {
                                 if let Some(ref mut dialog) = self.permission_dialog {
@@ -403,14 +441,22 @@ impl App {
                                     .unwrap_or_else(|| "deny".to_string());
                                 let _ = tx.send(AppEvent::PermissionResponse(response)).await;
                             }
+                            KeyCode::Esc => {
+                                // Escape closes permission dialog (deny)
+                                let _ = tx
+                                    .send(AppEvent::PermissionResponse("deny".to_string()))
+                                    .await;
+                            }
                             _ => {}
                         }
-                    } else if self.search_overlay.active {
-                        // Route keys to search overlay
+                        continue;
+                    }
+
+                    // --- Search overlay routing ---
+                    if self.search_overlay.active {
                         match self.search_overlay.handle_key(k) {
                             SearchAction::QueryChanged(query) => {
-                                self.message_list
-                                    .set_search(Some(query));
+                                self.message_list.set_search(Some(query));
                                 self.search_overlay.update_match_info(
                                     self.message_list.search_match_count(),
                                     0,
@@ -428,34 +474,104 @@ impl App {
                             }
                             SearchAction::None => {}
                         }
-                    } else {
-                        // Ctrl+F opens search overlay
-                        if matches!(
-                            (k.modifiers, k.code),
-                            (KeyModifiers::CONTROL, KeyCode::Char('f'))
-                        ) {
-                            self.search_overlay.open(None);
-                            self.focus.set(FocusTarget::Search);
-                            continue;
-                        }
+                        continue;
+                    }
 
-                        // Scroll message list with PageUp/PageDown
-                        if matches!(k.code, KeyCode::PageUp) {
-                            self.message_list.scroll_up(10);
-                            continue;
+                    // --- Escape: close dialogs, exit vim mode, cancel search ---
+                    if k.code == KeyCode::Esc {
+                        if self.prompt.completion.is_some() {
+                            self.prompt.completion = None;
+                        } else if self.prompt.history_search.active {
+                            self.prompt.history_search.active = false;
+                        } else {
+                            // Pass Escape through to input handler (for vim normal mode)
+                            self.input_handler.handle_key(k, &mut self.prompt);
                         }
-                        if matches!(k.code, KeyCode::PageDown) {
-                            self.message_list.scroll_down(10);
-                            continue;
-                        }
+                        continue;
+                    }
 
-                        // Route keys to prompt input
-                        match self.prompt.handle_key(k) {
-                            InputAction::Submit(text) => {
-                                let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
+                    // --- Ctrl+F opens search overlay ---
+                    if matches!(
+                        (k.modifiers, k.code),
+                        (KeyModifiers::CONTROL, KeyCode::Char('f'))
+                    ) {
+                        self.search_overlay.open(None);
+                        self.focus.set(FocusTarget::Search);
+                        continue;
+                    }
+
+                    // --- Ctrl+O: toggle transcript view mode ---
+                    if matches!(
+                        (k.modifiers, k.code),
+                        (KeyModifiers::CONTROL, KeyCode::Char('o'))
+                    ) {
+                        // Toggle expanded/collapsed state of the last focused message
+                        let last_idx = self.message_list.len().saturating_sub(1);
+                        self.message_list.toggle_expanded(last_idx);
+                        continue;
+                    }
+
+                    // --- Scroll message list with PageUp/PageDown ---
+                    if matches!(k.code, KeyCode::PageUp) {
+                        self.message_list.scroll_up(10);
+                        continue;
+                    }
+                    if matches!(k.code, KeyCode::PageDown) {
+                        self.message_list.scroll_down(10);
+                        continue;
+                    }
+
+                    // --- n/N: next/prev search match (when in vim normal mode) ---
+                    if self.input_handler.mode() == InputMode::Normal {
+                        if let KeyCode::Char('n') = k.code {
+                            if k.modifiers.is_empty() {
+                                self.message_list.search_next();
+                                continue;
                             }
-                            InputAction::None => {}
                         }
+                        if let KeyCode::Char('N') = k.code {
+                            if k.modifiers.is_empty() {
+                                self.message_list.search_prev();
+                                continue;
+                            }
+                        }
+                        // "/" in normal mode opens search in transcript
+                        if let KeyCode::Char('/') = k.code {
+                            if k.modifiers.is_empty() && self.prompt.is_empty() {
+                                self.search_overlay.open(None);
+                                self.focus.set(FocusTarget::Search);
+                                continue;
+                            }
+                        }
+                    }
+
+                    // --- Route keys through the InputHandler ---
+                    // Sync vim mode state from app
+                    if self.vim_mode != self.input_handler.vim_enabled() {
+                        self.input_handler.set_vim_enabled(self.vim_mode);
+                    }
+
+                    match self.input_handler.handle_key(k, &mut self.prompt) {
+                        InputResult::Submit(text) => {
+                            let _ = tx.send(AppEvent::SubmitPrompt(text)).await;
+                        }
+                        InputResult::ExCommand(cmd) => {
+                            // Handle vim ex-commands
+                            match cmd.as_str() {
+                                "q" | "quit" => {
+                                    cancel.cancel();
+                                    self.should_quit = true;
+                                }
+                                _ => {
+                                    self.message_list.push(MessageEntry::System {
+                                        text: format!("Unknown command: :{}", cmd),
+                                        severity: SystemSeverity::Warning,
+                                    });
+                                }
+                            }
+                        }
+                        InputResult::Consumed => {}
+                        InputResult::NotConsumed => {}
                     }
                 }
                 AppEvent::SubmitPrompt(text) => {
@@ -547,7 +663,7 @@ impl App {
                                         Err(e) => {
                                             self.message_list.push(MessageEntry::System {
                                                 text: format!("Compact error: {e}"),
-                                                severity: SystemSeverity::Info,
+                                                severity: SystemSeverity::Error,
                                             });
                                         }
                                     }
@@ -576,6 +692,7 @@ impl App {
                                                     id,
                                                     session.messages.len()
                                                 ),
+                                                severity: SystemSeverity::Info,
                                             });
                                             // Re-display prior conversation messages
                                             for msg in &session.messages {
@@ -610,6 +727,7 @@ impl App {
                                                             self.message_list.push(
                                                                 MessageEntry::User {
                                                                     text: text.clone(),
+                                                                    images: vec![],
                                                                 },
                                                             );
                                                         }
@@ -631,6 +749,7 @@ impl App {
                                                     "Failed to resume session {}: {}",
                                                     id, e
                                                 ),
+                                                severity: SystemSeverity::Error,
                                             });
                                         }
                                     }
@@ -645,6 +764,7 @@ impl App {
                                             "Plan mode: {}",
                                             if self.plan_mode { "on" } else { "off" }
                                         ),
+                                        severity: SystemSeverity::Info,
                                     });
                                 }
                                 CommandResult::ToggleVimMode => {
@@ -657,6 +777,7 @@ impl App {
                                             "Vim mode: {}",
                                             if self.vim_mode { "on" } else { "off" }
                                         ),
+                                        severity: SystemSeverity::Info,
                                     });
                                 }
                                 CommandResult::Prompt {
@@ -678,7 +799,7 @@ impl App {
 
                     // Add user message to display
                     self.message_list
-                        .push(MessageEntry::User { text: text.clone() });
+                        .push(MessageEntry::User { text: text.clone(), images: vec![] });
 
                     // Add to engine
                     engine.add_user_message(&text);
@@ -753,7 +874,7 @@ impl App {
                             self.engine_busy = false;
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
-                                severity: SystemSeverity::Info,
+                                severity: SystemSeverity::Error,
                             });
                         }
                     }
@@ -797,9 +918,11 @@ impl App {
                                 output: serde_json::Value::String(result_text.clone()),
                             });
                             self.message_list.push(MessageEntry::ToolResult {
+                                id: info.id.clone(),
                                 name: info.name.clone(),
                                 output: truncate_result(&result_text),
                                 is_error,
+                                duration_ms: None,
                             });
                             // Notify LSP of file changes after Edit/Write
                             if matches!(info.name.as_str(), "Edit" | "Write") {
@@ -830,9 +953,11 @@ impl App {
                             let info = &pending_tools[tool_idx].info;
                             engine.add_tool_result(&info.id, "Permission denied by user", true);
                             self.message_list.push(MessageEntry::ToolResult {
+                                id: info.id.clone(),
                                 name: info.name.clone(),
                                 output: "Permission denied".to_string(),
                                 is_error: true,
+                                duration_ms: None,
                             });
 
                             // Check next tool or continue turn
@@ -928,7 +1053,7 @@ impl App {
                             self.engine_busy = false;
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
-                                severity: SystemSeverity::Info,
+                                severity: SystemSeverity::Error,
                             });
                         }
                     }
@@ -1003,7 +1128,7 @@ impl App {
                     });
                     self.message_list.push(MessageEntry::System {
                         text: format!("Denied: {}", message),
-                        severity: SystemSeverity::Info,
+                        severity: SystemSeverity::Warning,
                     });
                 }
             }
@@ -1023,41 +1148,49 @@ impl App {
                 }
             }
             StreamEvent::ThinkingDelta { text } => {
-                if let Some(MessageEntry::Thinking { text: ref mut t }) =
+                if let Some(MessageEntry::Thinking { text: ref mut t, .. }) =
                     self.message_list.messages_mut().last_mut()
                 {
                     t.push_str(&text);
                 } else {
-                    self.message_list.push(MessageEntry::Thinking { text });
+                    self.message_list.push(MessageEntry::Thinking {
+                        text,
+                        is_collapsed: true,
+                    });
                 }
             }
             StreamEvent::ToolStart {
-                tool_use_id: _,
+                tool_use_id,
                 name,
                 input,
             } => {
-                let summary = serde_json::to_string(&input).unwrap_or_else(|_| input.to_string());
-                let summary = if summary.len() > 120 {
-                    format!("{}...", &summary[..117])
-                } else {
-                    summary
-                };
                 self.message_list.push(MessageEntry::ToolUse {
+                    id: tool_use_id,
                     name: name.clone(),
-                    input_summary: summary,
+                    input,
+                    status: ToolUseStatus::Running,
                 });
                 self.spinner.start(SpinnerMode::Tool { name });
             }
             StreamEvent::ToolResult {
-                tool_use_id: _,
+                tool_use_id,
                 result,
             } => {
+                // Update the corresponding ToolUse status
+                let status = if result.is_error {
+                    ToolUseStatus::Error
+                } else {
+                    ToolUseStatus::Complete
+                };
+                self.message_list.update_tool_status(&tool_use_id, status);
                 self.message_list.push(MessageEntry::ToolResult {
+                    id: tool_use_id,
                     name: "tool".to_string(),
                     output: truncate_result(
                         result.data.as_str().unwrap_or(&result.data.to_string()),
                     ),
                     is_error: result.is_error,
+                    duration_ms: None,
                 });
             }
             StreamEvent::Done { stop_reason: _ } => {
@@ -1079,7 +1212,7 @@ impl App {
             StreamEvent::Error(err) => {
                 self.message_list.push(MessageEntry::System {
                     text: format!("Error: {}", err),
-                    severity: SystemSeverity::Info,
+                    severity: SystemSeverity::Error,
                 });
             }
             StreamEvent::RetryWait {
@@ -1104,14 +1237,12 @@ impl App {
                         text: format!(
                             "Retrying ({status_label}, attempt {attempt}, waiting {delay_ms}ms)..."
                         ),
+                        severity: SystemSeverity::Warning,
                     });
                 }
             }
             StreamEvent::Compacted { summary } => {
-                self.message_list.push(MessageEntry::System {
-                    text: format!("Context compacted: {summary}"),
-                    severity: SystemSeverity::Info,
-                });
+                self.message_list.push(MessageEntry::CompactBoundary { summary });
             }
             _ => {}
         }
@@ -1120,9 +1251,20 @@ impl App {
     fn handle_key_standalone(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
-            (KeyModifiers::CONTROL, KeyCode::Char('d')) => self.should_quit = true,
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                if self.prompt.is_empty() {
+                    self.should_quit = true;
+                }
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                let _ = self.terminal.clear();
+            }
             _ => {
-                self.prompt.handle_key(key);
+                // Sync vim mode state
+                if self.vim_mode != self.input_handler.vim_enabled() {
+                    self.input_handler.set_vim_enabled(self.vim_mode);
+                }
+                self.input_handler.handle_key(key, &mut self.prompt);
             }
         }
     }
@@ -1157,6 +1299,14 @@ impl App {
     }
 
     fn render(&mut self) -> Result<()> {
+        // Capture vim mode indicator for rendering
+        let vim_mode_str: Option<String> = if self.vim_mode {
+            Some(self.input_handler.mode().to_string())
+        } else {
+            None
+        };
+        // Compute dynamic input area height based on line count
+        let input_area_height = (self.prompt.line_count().max(1).min(10) as u16) + 1;
         // Prune expired notifications before rendering
         self.notifications.prune();
 
@@ -1167,6 +1317,8 @@ impl App {
         let permission_dialog = &self.permission_dialog;
         let search_overlay = &self.search_overlay;
         let notifications = &self.notifications;
+        let input_handler = &self.input_handler;
+        let show_welcome = message_list.is_empty() && !spinner.active;
         // Read live state from AppStateStore (non-blocking try_read to avoid
         // stalling the 60fps render loop if the engine holds a write lock).
         let (state_model, state_tokens, state_cost, state_plan, state_vim) =
@@ -1198,35 +1350,23 @@ impl App {
                 )
             };
 
+        // Compute input line count for dynamic input area sizing
+        let input_line_count = prompt.line_count().max(1) as u16;
+        let spinner_height = spinner.render_height();
+
         self.terminal.draw(|frame| {
             let area = frame.area();
 
-            // Layout: header separator, header, separator, messages, spinner, separator, input
-            let spinner_height = if spinner.active { 1 } else { 0 };
-            let chunks = Layout::default()
-                .constraints([
-                    Constraint::Length(1),              // Top border
-                    Constraint::Length(1),              // Header
-                    Constraint::Length(1),              // Header separator
-                    Constraint::Min(1),                 // Messages
-                    Constraint::Length(spinner_height), // Spinner
-                    Constraint::Length(3),              // Input (with top border)
-                ])
-                .split(area);
+            // Use the new layout system: Header | Separator | Messages | Spinner | Input | StatusBar
+            let layout = crate::layout::TuiLayout::compute(
+                area,
+                spinner_height,
+                input_line_count,
+                true, // always show status bar
+            );
 
-            // Top border line
-            let border_line = "─".repeat(area.width as usize);
-            let top_border = Paragraph::new(border_line.clone())
-                .style(ratatui::style::Style::default().fg(theme.border));
-            frame.render_widget(top_border, chunks[0]);
-
-            // Header: "Claude Code (Rust) | model: ... | N tokens | $X.XX | PLAN"
-            let token_str = if state_tokens > 0 {
-                format!("{} tokens", state_tokens)
-            } else {
-                "0 tokens".to_string()
-            };
-            let mut header_spans = vec![
+            // Header: "Claude Code (Rust) | model"
+            let header_spans = vec![
                 ratatui::text::Span::styled(
                     " Claude Code (Rust)",
                     ratatui::style::Style::default()
@@ -1238,105 +1378,82 @@ impl App {
                     ratatui::style::Style::default().fg(theme.border),
                 ),
                 ratatui::text::Span::styled(
-                    format!("model: {}", state_model),
-                    ratatui::style::Style::default().fg(theme.muted),
-                ),
-                ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ),
-                ratatui::text::Span::styled(
-                    token_str,
+                    &state_model,
                     ratatui::style::Style::default().fg(theme.muted),
                 ),
             ];
-            if state_cost > 0.0 {
-                header_spans.push(ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ));
-                let cost_str = if state_cost < 0.01 {
-                    format!("${:.4}", state_cost)
-                } else if state_cost < 1.0 {
-                    format!("${:.3}", state_cost)
-                } else {
-                    format!("${:.2}", state_cost)
-                };
-                header_spans.push(ratatui::text::Span::styled(
-                    cost_str,
-                    ratatui::style::Style::default().fg(theme.muted),
-                ));
-            }
-            if state_plan {
-                header_spans.push(ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ));
-                header_spans.push(ratatui::text::Span::styled(
-                    "PLAN",
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Yellow)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ));
-            }
-            if state_vim {
-                header_spans.push(ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::default().fg(theme.border),
-                ));
-                header_spans.push(ratatui::text::Span::styled(
-                    "VIM",
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Blue)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ));
-            }
             let header = Paragraph::new(ratatui::text::Line::from(header_spans));
-            frame.render_widget(header, chunks[1]);
+            frame.render_widget(header, layout.header);
 
             // Header separator
+            let border_line = "\u{2500}".repeat(area.width as usize);
             let header_sep = Paragraph::new(border_line)
                 .style(ratatui::style::Style::default().fg(theme.border));
-            frame.render_widget(header_sep, chunks[2]);
+            frame.render_widget(header_sep, layout.header_separator);
 
-            // Messages area
-            let msg_widget = MessageListWidget::new(message_list);
-            frame.render_widget(msg_widget, chunks[3]);
+            // Messages area (or welcome screen for new sessions)
+            if show_welcome {
+                let welcome_state = WelcomeState::new(state_model.clone());
+                let welcome_widget = WelcomeWidget::new(&welcome_state);
+                frame.render_widget(welcome_widget, layout.messages);
+            } else {
+                let msg_widget = MessageListWidget::new(message_list);
+                frame.render_widget(msg_widget, layout.messages);
+            }
 
             // Spinner
             if spinner.active {
-                frame.render_widget(spinner, chunks[4]);
+                frame.render_widget(spinner, layout.spinner);
             }
 
             // Input
-            let input_widget = PromptInputWidget::new(prompt);
-            frame.render_widget(input_widget, chunks[5]);
+            let mut input_widget = PromptInputWidget::new(prompt);
+            if let Some(ref mode_str) = vim_mode_str {
+                input_widget = input_widget.vim_mode(mode_str);
+            }
+            frame.render_widget(input_widget, layout.input);
 
-            // Permission dialog overlay
+            // Status bar (full-featured, bottom of screen)
+            let status_state = StatusBarState {
+                model_name: state_model.clone(),
+                total_tokens: state_tokens,
+                total_cost: state_cost,
+                input_mode: input_handler.mode(),
+                vim_enabled: state_vim,
+                plan_mode: state_plan,
+                context_percent: 0.0, // TODO: wire context window tracking
+                session_name: None,   // TODO: wire session name from state
+                rate_limited: false,  // TODO: wire rate limit detection
+            };
+            let status_widget = StatusBarWidget::new(&status_state);
+            frame.render_widget(status_widget, layout.status_bar);
+
+            // Permission dialog overlay (sized for JSON preview)
             if let Some(dialog) = permission_dialog {
-                let dialog_area = centered_rect(60, 10, area);
+                let dialog_height = (area.height * 60 / 100).max(12).min(area.height);
+                let dialog_area = crate::layout::centered_rect(70, dialog_height, area);
                 frame.render_widget(dialog, dialog_area);
             }
 
             // Search overlay (at bottom of messages area)
             if search_overlay.active {
                 let search_area = Rect::new(
-                    chunks[3].x,
-                    chunks[3].y + chunks[3].height.saturating_sub(1),
-                    chunks[3].width,
+                    layout.messages.x,
+                    layout.messages.y + layout.messages.height.saturating_sub(1),
+                    layout.messages.width,
                     1,
                 );
                 let search_widget = SearchOverlayWidget::new(search_overlay);
                 frame.render_widget(search_widget, search_area);
             }
 
-            // Notification popups (top-right corner)
+            // Notification popups (top-right corner, below header)
             if notifications.has_active() {
                 let notif_area = Rect::new(
                     area.x,
-                    area.y + 1, // below top border
+                    area.y + 2, // below header + separator
                     area.width,
-                    3.min(area.height.saturating_sub(1)),
+                    3.min(area.height.saturating_sub(2)),
                 );
                 let notif_widget = NotificationWidget::new(notifications);
                 frame.render_widget(notif_widget, notif_area);
@@ -1383,10 +1500,4 @@ fn truncate_result(s: &str) -> String {
     }
 }
 
-/// Calculate a centered rect within the given area.
-fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let width = area.width * percent_x / 100;
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width, height.min(area.height))
-}
+

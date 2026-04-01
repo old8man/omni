@@ -7,6 +7,7 @@ fn test_message_list_push_and_len() {
     assert!(list.is_empty());
     list.push(MessageEntry::User {
         text: "hello".into(),
+        images: vec![],
     });
     assert_eq!(list.len(), 1);
     list.push(MessageEntry::Assistant {
@@ -20,6 +21,7 @@ fn test_message_list_clear() {
     let mut list = MessageList::new();
     list.push(MessageEntry::User {
         text: "test".into(),
+        images: vec![],
     });
     list.clear();
     assert!(list.is_empty());
@@ -31,6 +33,7 @@ fn test_message_list_scroll() {
     for i in 0..20 {
         list.push(MessageEntry::User {
             text: format!("msg {}", i),
+            images: vec![],
         });
     }
     list.scroll_up(5);

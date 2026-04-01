@@ -131,19 +131,31 @@ impl InputHandler {
 
     /// Handle keys in vim Insert mode.
     ///
-    /// Escape transitions to Normal mode. All other keys are handled by the
-    /// standard prompt input, but we also record inserted text for dot-repeat.
+    /// Escape transitions to Normal mode. Ctrl+Enter / Shift+Enter submits.
+    /// All other keys are handled by the standard prompt input.
     fn handle_vim_insert(&mut self, key: KeyEvent, prompt: &mut PromptInput) -> InputResult {
         // Escape -> Normal mode
         if key.code == KeyCode::Esc {
             self.vim_state.enter_normal();
             // In vim, cursor backs up one on Esc from insert
-            let text = prompt.text().to_string();
+            let text = prompt.text();
             if prompt.cursor() > 0 {
                 let new_cursor = vim::prev_char_boundary(&text, prompt.cursor());
                 prompt.set_cursor(new_cursor);
             }
             return InputResult::Consumed;
+        }
+
+        // Ctrl+Enter / Shift+Enter / Alt+Enter submits
+        if key.code == KeyCode::Enter
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT))
+            && !prompt.is_empty()
+        {
+            let text = prompt.submit();
+            self.vim_state.enter_insert();
+            return InputResult::Submit(text);
         }
 
         // Record inserted characters for dot-repeat
@@ -153,11 +165,16 @@ impl InputHandler {
             }
         }
 
-        // Enter submits
-        if key.code == KeyCode::Enter && !prompt.is_empty() {
-            let text = prompt.submit();
-            self.vim_state.enter_insert();
-            return InputResult::Submit(text);
+        // Plain Enter in vim insert mode: insert newline (multiline editing)
+        // Unlike emacs mode, in vim we always insert newline on Enter.
+        // Submit is done via :w or Ctrl+Enter.
+        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+            // For single-line content, still submit on Enter for convenience
+            if prompt.line_count() == 1 && !prompt.is_empty() {
+                let text = prompt.submit();
+                self.vim_state.enter_insert();
+                return InputResult::Submit(text);
+            }
         }
 
         // Delegate to prompt for actual text manipulation
@@ -180,7 +197,7 @@ impl InputHandler {
             _ => return InputResult::NotConsumed,
         };
 
-        let text = prompt.text().to_string();
+        let text = prompt.text();
         let cursor = prompt.cursor();
         let action = process_normal_key(ch, &text, cursor, &mut self.vim_state);
 
@@ -201,7 +218,7 @@ impl InputHandler {
             _ => return InputResult::NotConsumed,
         };
 
-        let text = prompt.text().to_string();
+        let text = prompt.text();
         let cursor = prompt.cursor();
         let anchor = self.vim_state.visual_anchor.unwrap_or(cursor);
 
@@ -246,7 +263,7 @@ impl InputHandler {
     }
 
     /// Handle keys in vim Command mode (`:` ex-command line).
-    fn handle_vim_command(&mut self, key: KeyEvent, _prompt: &mut PromptInput) -> InputResult {
+    fn handle_vim_command(&mut self, key: KeyEvent, prompt: &mut PromptInput) -> InputResult {
         match key.code {
             KeyCode::Esc => {
                 self.vim_state.enter_normal();
@@ -258,7 +275,28 @@ impl InputHandler {
                 if cmd.is_empty() {
                     InputResult::Consumed
                 } else {
-                    InputResult::ExCommand(cmd)
+                    // Handle :w (submit), :q (quit), :wq (submit and quit)
+                    match cmd.as_str() {
+                        "w" => {
+                            if !prompt.is_empty() {
+                                let text = prompt.submit();
+                                self.vim_state.enter_insert();
+                                InputResult::Submit(text)
+                            } else {
+                                InputResult::Consumed
+                            }
+                        }
+                        "wq" => {
+                            if !prompt.is_empty() {
+                                let text = prompt.submit();
+                                self.vim_state.enter_insert();
+                                InputResult::Submit(text)
+                            } else {
+                                InputResult::ExCommand("q".to_string())
+                            }
+                        }
+                        _ => InputResult::ExCommand(cmd),
+                    }
                 }
             }
             KeyCode::Backspace => {
@@ -303,7 +341,7 @@ impl InputHandler {
                 InputResult::Consumed
             }
             NormalAction::Delete { from, to, linewise } => {
-                let text = prompt.text().to_string();
+                let text = prompt.text();
                 let deleted = text.get(from..to).unwrap_or("").to_string();
                 self.vim_state.persistent.register = deleted;
                 self.vim_state.persistent.register_is_linewise = linewise;
@@ -311,7 +349,7 @@ impl InputHandler {
                 InputResult::Consumed
             }
             NormalAction::Change { from, to } => {
-                let text = prompt.text().to_string();
+                let text = prompt.text();
                 let deleted = text.get(from..to).unwrap_or("").to_string();
                 self.vim_state.persistent.register = deleted;
                 self.vim_state.persistent.register_is_linewise = false;
@@ -320,7 +358,7 @@ impl InputHandler {
                 InputResult::Consumed
             }
             NormalAction::Yank { from, to, linewise } => {
-                let text = prompt.text().to_string();
+                let text = prompt.text();
                 let yanked = text.get(from..to).unwrap_or("").to_string();
                 self.vim_state.persistent.register = yanked;
                 self.vim_state.persistent.register_is_linewise = linewise;
@@ -334,7 +372,7 @@ impl InputHandler {
                 let reg = self.vim_state.persistent.register.clone();
                 if !reg.is_empty() {
                     let cursor = prompt.cursor();
-                    let text = prompt.text().to_string();
+                    let text = prompt.text();
                     let pos = if after {
                         if cursor < text.len() {
                             vim::next_char_boundary(&text, cursor)
@@ -347,7 +385,7 @@ impl InputHandler {
                     prompt.insert_str_at(pos, &reg);
                     // Position cursor at end of pasted text - 1
                     let end = pos + reg.len();
-                    let final_text = prompt.text().to_string();
+                    let final_text = prompt.text();
                     let final_pos = if end > 0 {
                         vim::prev_char_boundary(&final_text, end)
                     } else {
@@ -378,7 +416,7 @@ impl InputHandler {
         change: &vim::RecordedChange,
         prompt: &mut PromptInput,
     ) {
-        let text = prompt.text().to_string();
+        let text = prompt.text();
         let cursor = prompt.cursor();
 
         match change {
@@ -472,7 +510,8 @@ impl InputHandler {
             | vim::RecordedChange::Join { .. }
             | vim::RecordedChange::Indent { .. }
             | vim::RecordedChange::OpenLine { .. } => {
-                // Single-line prompt — these are no-ops
+                // These are handled in multiline context but are no-ops for dot-repeat
+                // in the simple case.
             }
         }
     }
@@ -583,6 +622,24 @@ mod tests {
         let result = handler.handle_key(key(KeyCode::Enter), &mut prompt);
         assert!(matches!(result, InputResult::ExCommand(ref s) if s == "q"));
         assert_eq!(handler.mode(), InputMode::Normal);
+    }
+
+    #[test]
+    fn test_vim_command_w_submits() {
+        let mut handler = InputHandler::new();
+        handler.set_vim_enabled(true);
+        let mut prompt = PromptInput::new();
+
+        // Type some text
+        for c in "hello".chars() {
+            handler.handle_key(key(KeyCode::Char(c)), &mut prompt);
+        }
+        // Esc -> Normal, then :w
+        handler.handle_key(key(KeyCode::Esc), &mut prompt);
+        handler.handle_key(key(KeyCode::Char(':')), &mut prompt);
+        handler.handle_key(key(KeyCode::Char('w')), &mut prompt);
+        let result = handler.handle_key(key(KeyCode::Enter), &mut prompt);
+        assert!(matches!(result, InputResult::Submit(ref s) if s == "hello"));
     }
 
     #[test]
