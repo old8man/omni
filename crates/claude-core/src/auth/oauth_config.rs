@@ -1,6 +1,6 @@
-/// OAuth endpoint configuration matching the real Claude Code production config.
-///
-/// Reference: original/claude-code/constants/oauth.ts
+//! OAuth endpoint configuration matching the real Claude Code production config.
+//!
+//! Reference: original/claude-code/constants/oauth.ts
 
 /// Production OAuth client ID
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";

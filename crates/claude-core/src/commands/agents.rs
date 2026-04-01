@@ -24,7 +24,7 @@ impl Command for AgentsCommand {
     }
 
     async fn execute(&self, args: &str, ctx: &CommandContext) -> CommandResult {
-        let parts: Vec<&str> = args.trim().split_whitespace().collect();
+        let parts: Vec<&str> = args.split_whitespace().collect();
 
         match parts.first().copied().unwrap_or("list") {
             "list" | "" => {
@@ -41,7 +41,7 @@ impl Command for AgentsCommand {
                         let mut agents: Vec<String> = Vec::new();
                         for entry in entries.flatten() {
                             let path = entry.path();
-                            if path.extension().map_or(false, |ext| {
+                            if path.extension().is_some_and(|ext| {
                                 ext == "json" || ext == "toml" || ext == "yaml" || ext == "yml"
                             }) {
                                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -96,7 +96,7 @@ impl Command for AgentsCommand {
                                 .flatten()
                                 .filter_map(|e| {
                                     let p = e.path();
-                                    if p.extension().map_or(false, |ext| {
+                                    if p.extension().is_some_and(|ext| {
                                         ext == "json"
                                             || ext == "toml"
                                             || ext == "yaml"

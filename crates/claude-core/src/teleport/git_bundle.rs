@@ -64,9 +64,9 @@ pub enum BundleUploadResult {
 }
 
 /// Result of the bundle creation step (before upload).
-enum BundleCreateResult {
-    Ok { #[allow(dead_code)] size: u64, scope: BundleScope },
-    Err { error: String, #[allow(dead_code)] fail_reason: BundleFailReason },
+pub enum BundleCreateResult {
+    Ok { size: u64, scope: BundleScope },
+    Err { error: String, fail_reason: BundleFailReason },
 }
 
 /// Find the git repository root for a given working directory.

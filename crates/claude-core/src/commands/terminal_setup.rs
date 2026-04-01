@@ -51,7 +51,7 @@ impl Command for TerminalSetupCommand {
         let is_vscode = terminal_ref == "vscode"
             || std::env::var("TERM_PROGRAM_VERSION")
                 .ok()
-                .map_or(false, |v| v.contains("vscode"));
+                .is_some_and(|v| v.contains("vscode"));
         let is_tmux = std::env::var("TMUX").is_ok();
 
         let mut output = String::from("Terminal Setup\n");

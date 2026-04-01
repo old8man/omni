@@ -27,12 +27,10 @@ use super::types::{
 use super::work_secret::{same_session_id, to_compat_session_id};
 
 /// How often the bridge polls for new work (used by single-session callers).
-#[allow(dead_code)]
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Grace period for in-flight sessions during shutdown.
-#[allow(dead_code)]
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// Heartbeat interval for active sessions.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -83,8 +81,7 @@ pub struct ActiveSession {
     /// Compat-format session ID (session_*).
     compat_id: String,
     /// Whether this session uses CCR v2 transport.
-    #[allow(dead_code)]
-    is_v2: bool,
+    pub is_v2: bool,
     /// Timeout timer handle, if set.
     timeout_at: Option<Instant>,
     /// Whether the session was killed by the timeout watchdog.

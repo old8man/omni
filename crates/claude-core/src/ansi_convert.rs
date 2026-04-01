@@ -366,26 +366,26 @@ pub fn ansi_to_svg_with_options(input: &str, options: &AnsiToSvgOptions) -> Stri
 
     let mut svg = String::with_capacity(4096);
 
-    let _ = write!(
+    let _ = writeln!(
         svg,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">",
         width, height, width, height
     );
-    let _ = write!(
+    let _ = writeln!(
         svg,
-        "  <rect width=\"100%\" height=\"100%\" fill=\"{}\" rx=\"{}\" ry=\"{}\"/>\n",
+        "  <rect width=\"100%\" height=\"100%\" fill=\"{}\" rx=\"{}\" ry=\"{}\"/>",
         options.background_color, options.border_radius, options.border_radius
     );
-    let _ = write!(svg, "  <style>\n");
-    let _ = write!(
+    let _ = writeln!(svg, "  <style>");
+    let _ = writeln!(
         svg,
-        "    text {{ font-family: {}; font-size: {}px; white-space: pre; }}\n",
+        "    text {{ font-family: {}; font-size: {}px; white-space: pre; }}",
         options.font_family, options.font_size
     );
-    let _ = write!(svg, "    .b {{ font-weight: bold; }}\n");
-    let _ = write!(svg, "    .i {{ font-style: italic; }}\n");
-    let _ = write!(svg, "    .u {{ text-decoration: underline; }}\n");
-    let _ = write!(svg, "  </style>\n");
+    let _ = writeln!(svg, "    .b {{ font-weight: bold; }}");
+    let _ = writeln!(svg, "    .i {{ font-style: italic; }}");
+    let _ = writeln!(svg, "    .u {{ text-decoration: underline; }}");
+    let _ = writeln!(svg, "  </style>");
 
     for (line_index, spans) in lines.iter().enumerate() {
         let y = options.padding_y as f64
@@ -430,7 +430,7 @@ pub fn ansi_to_svg_with_options(input: &str, options: &AnsiToSvgOptions) -> Stri
             );
         }
 
-        let _ = write!(svg, "</text>\n");
+        let _ = writeln!(svg, "</text>");
     }
 
     svg.push_str("</svg>");

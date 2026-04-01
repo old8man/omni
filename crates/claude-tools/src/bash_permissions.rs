@@ -403,8 +403,7 @@ struct ParsedRule {
 /// - `"npm *"` — glob match
 fn parse_permission_rule(pattern: &str) -> ParsedRule {
     // Check for `prefix:*` pattern.
-    if pattern.ends_with(":*") {
-        let prefix = &pattern[..pattern.len() - 2];
+    if let Some(prefix) = pattern.strip_suffix(":*") {
         return ParsedRule {
             command: format!("{} ", prefix),
             match_type: RuleMatchType::Prefix,
@@ -429,7 +428,6 @@ fn parse_permission_rule(pattern: &str) -> ParsedRule {
 /// Extract a stable command prefix (command + subcommand) from a raw command string.
 fn get_simple_command_prefix(command: &str) -> Option<String> {
     let tokens: Vec<&str> = command
-        .trim()
         .split_whitespace()
         .filter(|s| !s.is_empty())
         .collect();

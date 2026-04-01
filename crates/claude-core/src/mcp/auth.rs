@@ -145,7 +145,7 @@ impl OAuthStore {
 /// Generate a unique key for server credentials based on server name + config
 /// hash (matching the TS `getServerKey`).
 pub fn get_server_key(server_name: &str, server_url: &str) -> String {
-    let input = format!("{server_url}");
+    let input = server_url.to_string();
     let hash = hex::encode(Sha256::digest(input.as_bytes()));
     format!("{}|{}", server_name, &hash[..16])
 }

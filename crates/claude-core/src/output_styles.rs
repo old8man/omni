@@ -272,7 +272,7 @@ fn load_style_from_file(path: &Path) -> Result<OutputStyle> {
     {
         // Check if it's in the home directory
         if let Some(home) = dirs::home_dir() {
-            if path.starts_with(&home.join(".claude")) {
+            if path.starts_with(home.join(".claude")) {
                 StyleSource::UserSettings
             } else {
                 StyleSource::ProjectSettings

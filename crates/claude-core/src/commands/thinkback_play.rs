@@ -46,7 +46,7 @@ impl Command for ThinkbackPlayCommand {
                     entries.flatten().any(|e| {
                         e.file_name()
                             .to_str()
-                            .map_or(false, |n| n.contains("thinkback"))
+                            .is_some_and(|n| n.contains("thinkback"))
                     })
                 } else {
                     false
@@ -66,9 +66,10 @@ impl Command for ThinkbackPlayCommand {
         let mut output = String::new();
 
         // Header with sparkle effect
-        output.push_str(&format!("{}", PURPLE));
+        output.push_str(PURPLE);
         output.push_str(FRAMES[0]);
-        output.push_str(&format!("{}\n", RESET));
+        output.push_str(RESET);
+        output.push('\n');
 
         output.push_str(&format!(
             "\n{}  Claude Code — Year in Review  {}\n\n",
@@ -83,9 +84,10 @@ impl Command for ThinkbackPlayCommand {
         output.push_str(&format!("  Session cost:  ${:.4}\n\n", ctx.total_cost));
 
         // Closing sparkle
-        output.push_str(&format!("{}", PURPLE));
+        output.push_str(PURPLE);
         output.push_str(FRAMES[2]);
-        output.push_str(&format!("{}\n", RESET));
+        output.push_str(RESET);
+        output.push('\n');
 
         output.push_str(&format!(
             "\n{}Thank you for coding with Claude!{}\n",

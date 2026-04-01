@@ -12,7 +12,7 @@
 //! - Team memory lives in a `team/` subdirectory of the auto-memory dir.
 
 pub mod age;
-pub mod memdir;
+pub mod core;
 pub mod memory_types;
 pub mod paths;
 pub mod relevance;
@@ -20,7 +20,7 @@ pub mod scan;
 pub mod team_mem;
 
 pub use age::{memory_age, memory_age_days, memory_freshness_note, memory_freshness_text};
-pub use memdir::{
+pub use core::{
     build_memory_lines, build_memory_prompt, ensure_memory_dir_exists, load_memory_prompt,
     truncate_entrypoint_content, EntrypointTruncation, ENTRYPOINT_NAME, MAX_ENTRYPOINT_BYTES,
     MAX_ENTRYPOINT_LINES,

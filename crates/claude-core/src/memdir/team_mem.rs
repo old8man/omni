@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::memdir::{ENTRYPOINT_NAME, MAX_ENTRYPOINT_LINES};
+use super::core::{ENTRYPOINT_NAME, MAX_ENTRYPOINT_LINES};
 use super::memory_types::{
     memory_drift_caveat, memory_frontmatter_example, trusting_recall_section,
     types_section_combined, what_not_to_save_section,
@@ -32,7 +32,7 @@ pub fn get_team_mem_entrypoint() -> PathBuf {
 
 /// Check if a resolved absolute path is within the team memory directory.
 pub fn is_team_mem_path(path: &Path) -> bool {
-    path.starts_with(&get_team_mem_path())
+    path.starts_with(get_team_mem_path())
 }
 
 /// Check if a file path is within team memory AND team memory is enabled.

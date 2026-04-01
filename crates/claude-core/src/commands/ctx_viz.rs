@@ -63,11 +63,11 @@ impl Command for CtxVizCommand {
 
         // Build the grid
         let mut grid = Vec::with_capacity(total_cells);
-        grid.extend(std::iter::repeat(COLOR_SYSTEM).take(cells_system));
-        grid.extend(std::iter::repeat(COLOR_USER).take(cells_user));
-        grid.extend(std::iter::repeat(COLOR_ASSISTANT).take(cells_assistant));
-        grid.extend(std::iter::repeat(COLOR_TOOL).take(cells_tool));
-        grid.extend(std::iter::repeat(COLOR_EMPTY).take(cells_empty));
+        grid.extend(std::iter::repeat_n(COLOR_SYSTEM, cells_system));
+        grid.extend(std::iter::repeat_n(COLOR_USER, cells_user));
+        grid.extend(std::iter::repeat_n(COLOR_ASSISTANT, cells_assistant));
+        grid.extend(std::iter::repeat_n(COLOR_TOOL, cells_tool));
+        grid.extend(std::iter::repeat_n(COLOR_EMPTY, cells_empty));
         grid.truncate(total_cells);
 
         // Pad if needed
@@ -82,8 +82,8 @@ impl Command for CtxVizCommand {
         for row in 0..GRID_HEIGHT {
             let start = row * GRID_WIDTH;
             let end = start + GRID_WIDTH;
-            for col in start..end {
-                output.push_str(grid[col]);
+            for cell in &grid[start..end] {
+                output.push_str(cell);
                 output.push_str("  "); // Two spaces make a visible block
                 output.push_str(RESET);
             }

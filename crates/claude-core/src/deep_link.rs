@@ -295,11 +295,10 @@ pub fn resolve_claude_path() -> Result<std::path::PathBuf> {
     // Try ~/.local/bin/claude first (native installer stable path)
     if let Some(home) = dirs::home_dir() {
         let stable_path = home.join(".local").join("bin").join(bin_name);
-        if stable_path.exists() {
-            if std::fs::canonicalize(&stable_path).is_ok() {
+        if stable_path.exists()
+            && std::fs::canonicalize(&stable_path).is_ok() {
                 return Ok(stable_path);
             }
-        }
     }
 
     // Fall back to current executable

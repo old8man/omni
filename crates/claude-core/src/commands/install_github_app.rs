@@ -47,9 +47,7 @@ impl Command for InstallGithubAppCommand {
                 lines.push("To set up Claude GitHub Actions:".to_string());
                 lines.push(String::new());
                 lines.push("1. Install the Claude GitHub App on your repository".to_string());
-                lines.push(format!(
-                    "   Visit: https://github.com/apps/claude/installations/new"
-                ));
+                lines.push("   Visit: https://github.com/apps/claude/installations/new".to_string());
                 lines.push(String::new());
                 lines.push("2. Add the ANTHROPIC_API_KEY secret to your repository".to_string());
                 lines.push(format!(

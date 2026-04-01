@@ -375,7 +375,6 @@ impl McpClient {
         // Heartbeat is only meaningful for long-lived transports.
         // For HTTP, the server manages sessions; heartbeat is not needed.
         if self.config.transport == McpTransportType::Http {
-            return;
         }
 
         // We can't easily ping from a background task without Arc<Self>.
@@ -530,7 +529,7 @@ impl McpClient {
             && self
                 .transport
                 .as_ref()
-                .map_or(false, |t| t.is_open())
+                .is_some_and(|t| t.is_open())
     }
 }
 
@@ -580,7 +579,7 @@ fn parse_capabilities(init_result: &Value) -> McpCapabilities {
     let instructions = init_result
         .get("instructions")
         .and_then(Value::as_str)
-        .map(|s| truncate_description(s));
+        .map(truncate_description);
     McpCapabilities {
         tools: caps.get("tools").is_some(),
         resources: caps.get("resources").is_some(),

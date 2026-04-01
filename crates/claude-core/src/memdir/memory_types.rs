@@ -306,7 +306,7 @@ pub fn when_to_access_section() -> Vec<String> {
         "- When memories seem relevant, or the user references prior-conversation work.".into(),
         "- You MUST access memory when the user explicitly asks you to check, recall, or remember.".into(),
         "- If the user says to *ignore* or *not use* memory: proceed as if MEMORY.md were empty. Do not apply remembered facts, cite, compare against, or mention memory content.".into(),
-        memory_drift_caveat().into(),
+        memory_drift_caveat(),
     ]
 }
 

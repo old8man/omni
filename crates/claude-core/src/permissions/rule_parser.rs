@@ -67,7 +67,7 @@ fn find_first_unescaped(s: &str, ch: char) -> Option<usize> {
                     break;
                 }
             }
-            if backslash_count % 2 == 0 {
+            if backslash_count.is_multiple_of(2) {
                 return Some(i);
             }
         }
@@ -90,7 +90,7 @@ fn find_last_unescaped(s: &str, ch: char) -> Option<usize> {
                     break;
                 }
             }
-            if backslash_count % 2 == 0 {
+            if backslash_count.is_multiple_of(2) {
                 return Some(i);
             }
         }
@@ -203,7 +203,7 @@ pub fn has_wildcards(pattern: &str) -> bool {
                     break;
                 }
             }
-            if backslash_count % 2 == 0 {
+            if backslash_count.is_multiple_of(2) {
                 return true;
             }
         }

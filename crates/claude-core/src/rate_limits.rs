@@ -110,8 +110,7 @@ impl RateLimitType {
     }
 
     /// The header abbreviation used in `anthropic-ratelimit-unified-{abbrev}-*`.
-    #[allow(dead_code)]
-    fn claim_abbrev(&self) -> Option<&'static str> {
+    pub fn claim_abbrev(&self) -> Option<&'static str> {
         match self {
             Self::FiveHour => Some("5h"),
             Self::SevenDay => Some("7d"),

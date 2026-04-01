@@ -1087,11 +1087,10 @@ impl ReadOnlyValidator {
                 // Block URLs to prevent exfiltration
                 additional_dangerous_check: Some(|_raw, args| {
                     for arg in args {
-                        if !arg.starts_with('-') {
-                            if arg.contains("://") || arg.contains('@') || arg.contains(':') {
+                        if !arg.starts_with('-')
+                            && (arg.contains("://") || arg.contains('@') || arg.contains(':')) {
                                 return true;
                             }
-                        }
                     }
                     false
                 }),
@@ -2082,16 +2081,16 @@ impl SedValidator {
                 continue;
             }
 
-            if arg.starts_with("--expression=") {
+            if let Some(expr) = arg.strip_prefix("--expression=") {
                 found_e_flag = true;
-                expressions.push(arg["--expression=".len()..].to_string());
+                expressions.push(expr.to_string());
                 i += 1;
                 continue;
             }
 
-            if arg.starts_with("-e=") {
+            if let Some(expr) = arg.strip_prefix("-e=") {
                 found_e_flag = true;
-                expressions.push(arg["-e=".len()..].to_string());
+                expressions.push(expr.to_string());
                 i += 1;
                 continue;
             }
@@ -2115,6 +2114,7 @@ impl SedValidator {
     }
 
     /// Check if a sed expression contains dangerous operations (denylist).
+    #[allow(clippy::invalid_regex)] // Backreferences (\1) are valid sed patterns, not regex bugs
     fn contains_dangerous_operations(expression: &str) -> bool {
         let cmd = expression.trim();
         if cmd.is_empty() {

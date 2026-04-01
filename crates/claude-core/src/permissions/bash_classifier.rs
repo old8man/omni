@@ -251,7 +251,7 @@ fn skip_env_assignments(cmd: &str) -> &str {
                 && before_eq
                     .chars()
                     .all(|c| c.is_alphanumeric() || c == '_')
-                && before_eq.chars().next().map_or(false, |c| !c.is_ascii_digit())
+                && before_eq.chars().next().is_some_and(|c| !c.is_ascii_digit())
             {
                 // Find end of the value (handles simple quoting).
                 let after_eq = &trimmed[eq_pos + 1..];
@@ -287,9 +287,9 @@ fn find_value_end(s: &str) -> usize {
         }
         b'\'' => {
             // Find closing single quote.
-            for i in 1..bytes.len() {
-                if bytes[i] == b'\'' {
-                    return i + 1;
+            for (i, &b) in bytes[1..].iter().enumerate() {
+                if b == b'\'' {
+                    return i + 2;
                 }
             }
             s.len()

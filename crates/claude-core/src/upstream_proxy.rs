@@ -108,21 +108,13 @@ impl Default for ProxyConfig {
 
 /// State of the upstream proxy after initialization.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct UpstreamProxyState {
     pub enabled: bool,
     pub port: Option<u16>,
     pub ca_bundle_path: Option<String>,
 }
 
-impl Default for UpstreamProxyState {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            port: None,
-            ca_bundle_path: None,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Proxy relay
@@ -231,7 +223,7 @@ impl UpstreamProxy {
         vars.insert("https_proxy".to_string(), proxy_url);
         vars.insert("NO_PROXY".to_string(), NO_PROXY_LIST.to_string());
         vars.insert("no_proxy".to_string(), NO_PROXY_LIST.to_string());
-        if let Some(ref path) = self.config.target_url.is_empty().then(|| ()).and(None::<String>) {
+        if let Some(ref path) = self.config.target_url.is_empty().then_some(()).and(None::<String>) {
             // Placeholder: if a CA bundle path were configured, set it here.
             let _ = path;
         }
@@ -328,7 +320,7 @@ async fn handle_connection(
                 .await?;
             return Ok(());
         }
-        let trimmed = line.trim_end_matches(|c| c == '\r' || c == '\n').to_string();
+        let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
         if trimmed.is_empty() {
             break;
         }
