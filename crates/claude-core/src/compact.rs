@@ -3,8 +3,18 @@
 //! Provides four strategies:
 //! - **Auto**: Send older messages to the API for summarization.
 //! - **Micro**: Truncate large tool results inline without an API call.
-//! - **Snip**: Drop oldest messages, keeping only recent ones.
+//! - **Snip**: Drop oldest messages, keeping only recent ones with a boundary marker.
 //! - **Reactive**: Two-phase — try micro first, then auto if still over budget.
+//!
+//! Additional capabilities:
+//! - **Message grouping**: Groups related messages (tool use + result pairs) by API round.
+//! - **Auto-compaction thresholds**: Token-based warning/error/blocking limits.
+//! - **Compaction boundary markers**: Insert markers showing where compaction occurred.
+//! - **Post-compact cleanup**: Reset caches and tracking state after compaction.
+//! - **Compact warning suppression**: Suppress stale warnings after successful compaction.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -12,6 +22,51 @@ use serde_json::Value;
 use crate::api::client::ApiClient;
 use crate::services::tool_use_summary::{self, ToolInfo};
 use crate::utils::context;
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+/// Reserve this many tokens for output during compaction.
+/// Based on p99.99 of compact summary output being 17,387 tokens.
+const MAX_OUTPUT_TOKENS_FOR_SUMMARY: usize = 20_000;
+
+/// Buffer tokens below the effective context window for auto-compact threshold.
+const AUTOCOMPACT_BUFFER_TOKENS: usize = 13_000;
+
+/// Buffer tokens for the warning threshold (below effective context).
+pub const WARNING_THRESHOLD_BUFFER_TOKENS: usize = 20_000;
+
+/// Buffer tokens for the error threshold (below effective context).
+pub const ERROR_THRESHOLD_BUFFER_TOKENS: usize = 20_000;
+
+/// Buffer tokens for the manual compact blocking limit.
+pub const MANUAL_COMPACT_BUFFER_TOKENS: usize = 3_000;
+
+/// Stop trying auto-compact after this many consecutive failures.
+const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: u32 = 3;
+
+/// Maximum number of prompt-too-long retries during compaction.
+const MAX_PTL_RETRIES: usize = 3;
+
+/// Maximum retries for streaming compaction API calls.
+const MAX_COMPACT_STREAMING_RETRIES: usize = 2;
+
+/// Maximum number of files to restore post-compact.
+pub const POST_COMPACT_MAX_FILES_TO_RESTORE: usize = 5;
+
+/// Token budget for post-compact file restoration.
+pub const POST_COMPACT_TOKEN_BUDGET: usize = 50_000;
+
+/// Maximum tokens per file for post-compact restoration.
+pub const POST_COMPACT_MAX_TOKENS_PER_FILE: usize = 5_000;
+
+/// Approximate token size for image/document blocks.
+const IMAGE_MAX_TOKEN_SIZE: usize = 2_000;
+
+/// Marker text used when clearing old tool results (time-based microcompact).
+pub const TIME_BASED_MC_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
+
+/// Marker text for prompt-too-long retry truncation.
+const PTL_RETRY_MARKER: &str = "[earlier conversation truncated for compaction retry]";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -38,12 +93,16 @@ pub struct CompactionConfig {
     pub target_after_compact: usize,
     /// Micro-compact: truncate tool results larger than this.
     pub micro_truncate_threshold: usize,
-    /// Snip-compact: number of recent messages to keep.
+    /// Snip-compact: number of recent message groups to keep.
     pub snip_keep_recent: usize,
     /// Token budget reserved for the summary output.
     pub summary_output_reserve: usize,
-    /// Auto-compact: number of recent messages to preserve.
+    /// Auto-compact: number of recent message groups to preserve.
     pub auto_keep_recent: usize,
+    /// Whether auto-compact is enabled.
+    pub auto_compact_enabled: bool,
+    /// Micro-compact: number of recent tool results to keep.
+    pub micro_keep_recent: usize,
 }
 
 impl CompactionConfig {
@@ -74,6 +133,8 @@ impl Default for CompactionConfig {
             snip_keep_recent: 4,
             summary_output_reserve: 20_000,
             auto_keep_recent: 4,
+            auto_compact_enabled: true,
+            micro_keep_recent: 10,
         }
     }
 }
@@ -91,6 +152,166 @@ pub struct CompactionResult {
     pub pre_compact_tokens: usize,
     /// Estimated token count after compaction.
     pub post_compact_tokens: usize,
+    /// Whether a compact boundary marker was inserted.
+    pub has_boundary_marker: bool,
+    /// The trigger that caused this compaction.
+    pub trigger: CompactionTrigger,
+}
+
+/// What triggered the compaction.
+#[derive(Clone, Debug, Default)]
+pub enum CompactionTrigger {
+    #[default]
+    Manual,
+    Auto,
+    Reactive,
+    PromptTooLong,
+}
+
+// ── Auto-compact tracking state ─────────────────────────────────────────────
+
+/// Tracks auto-compact state across turns in the query loop.
+#[derive(Clone, Debug)]
+pub struct AutoCompactTrackingState {
+    /// Whether compaction occurred on the current chain.
+    pub compacted: bool,
+    /// Turns since last compaction.
+    pub turn_counter: u32,
+    /// Unique ID for the current turn.
+    pub turn_id: String,
+    /// Consecutive auto-compact failures. Reset on success.
+    pub consecutive_failures: u32,
+}
+
+impl Default for AutoCompactTrackingState {
+    fn default() -> Self {
+        Self {
+            compacted: false,
+            turn_counter: 0,
+            turn_id: String::new(),
+            consecutive_failures: 0,
+        }
+    }
+}
+
+// ── Token warning state ─────────────────────────────────────────────────────
+
+/// Token usage warning thresholds for the context window.
+#[derive(Clone, Debug)]
+pub struct TokenWarningState {
+    /// Percentage of context window remaining (0-100).
+    pub percent_left: u8,
+    /// Whether token usage is above the warning threshold.
+    pub is_above_warning_threshold: bool,
+    /// Whether token usage is above the error threshold.
+    pub is_above_error_threshold: bool,
+    /// Whether auto-compact should trigger.
+    pub is_above_auto_compact_threshold: bool,
+    /// Whether the user is at the blocking limit (can't send more).
+    pub is_at_blocking_limit: bool,
+}
+
+/// Calculate token warning state for the given usage and model.
+pub fn calculate_token_warning_state(token_usage: usize, model: &str) -> TokenWarningState {
+    let effective_window = get_effective_context_window_size(model);
+    let auto_compact_threshold = get_auto_compact_threshold(model);
+    let threshold = if is_auto_compact_enabled() {
+        auto_compact_threshold
+    } else {
+        effective_window
+    };
+
+    let percent_left = if token_usage >= threshold {
+        0
+    } else {
+        ((threshold - token_usage) as f64 / threshold as f64 * 100.0).round() as u8
+    };
+
+    let warning_threshold = threshold.saturating_sub(WARNING_THRESHOLD_BUFFER_TOKENS);
+    let error_threshold = threshold.saturating_sub(ERROR_THRESHOLD_BUFFER_TOKENS);
+    let blocking_limit = effective_window.saturating_sub(MANUAL_COMPACT_BUFFER_TOKENS);
+
+    TokenWarningState {
+        percent_left,
+        is_above_warning_threshold: token_usage >= warning_threshold,
+        is_above_error_threshold: token_usage >= error_threshold,
+        is_above_auto_compact_threshold: is_auto_compact_enabled()
+            && token_usage >= auto_compact_threshold,
+        is_at_blocking_limit: token_usage >= blocking_limit,
+    }
+}
+
+/// Get the effective context window size minus reserved output tokens.
+pub fn get_effective_context_window_size(model: &str) -> usize {
+    let reserved = MAX_OUTPUT_TOKENS_FOR_SUMMARY.min(
+        context::COMPACT_MAX_OUTPUT_TOKENS as usize,
+    );
+    let window = context::get_context_window_for_model(model) as usize;
+    window.saturating_sub(reserved)
+}
+
+/// Calculate the auto-compact threshold for a model.
+pub fn get_auto_compact_threshold(model: &str) -> usize {
+    let effective_window = get_effective_context_window_size(model);
+    effective_window.saturating_sub(AUTOCOMPACT_BUFFER_TOKENS)
+}
+
+// ── Compact warning suppression ─────────────────────────────────────────────
+
+/// Global flag to suppress compact warnings after successful compaction.
+/// We suppress immediately after compaction since we don't have accurate
+/// token counts until the next API response.
+static COMPACT_WARNING_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Global counter for consecutive auto-compact failures (circuit breaker).
+static AUTO_COMPACT_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Suppress the compact warning. Call after successful compaction.
+pub fn suppress_compact_warning() {
+    COMPACT_WARNING_SUPPRESSED.store(true, Ordering::Relaxed);
+}
+
+/// Clear the compact warning suppression. Called at start of new compact attempt.
+pub fn clear_compact_warning_suppression() {
+    COMPACT_WARNING_SUPPRESSED.store(false, Ordering::Relaxed);
+}
+
+/// Check whether the compact warning is currently suppressed.
+pub fn is_compact_warning_suppressed() -> bool {
+    COMPACT_WARNING_SUPPRESSED.load(Ordering::Relaxed)
+}
+
+/// Check whether auto-compact is enabled (respects environment variables).
+pub fn is_auto_compact_enabled() -> bool {
+    if std::env::var("DISABLE_COMPACT").as_deref() == Ok("1") {
+        return false;
+    }
+    if std::env::var("DISABLE_AUTO_COMPACT").as_deref() == Ok("1") {
+        return false;
+    }
+    true
+}
+
+/// Record a consecutive auto-compact failure. Returns the new failure count.
+pub fn record_auto_compact_failure() -> u32 {
+    let count = AUTO_COMPACT_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if count >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES {
+        tracing::warn!(
+            "auto-compact circuit breaker tripped after {} consecutive failures",
+            count
+        );
+    }
+    count
+}
+
+/// Reset the auto-compact failure count (call after successful compaction).
+pub fn reset_auto_compact_failures() {
+    AUTO_COMPACT_FAILURE_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Check whether the auto-compact circuit breaker has tripped.
+pub fn is_auto_compact_circuit_broken() -> bool {
+    AUTO_COMPACT_FAILURE_COUNT.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
 }
 
 // ── Token estimation ─────────────────────────────────────────────────────────
@@ -118,10 +339,304 @@ pub fn estimate_tokens_for_file(content: &str, extension: &str) -> usize {
     crate::services::token_estimation::rough_token_count_for_file_type(content, extension)
 }
 
+/// Estimate token count for a slice of messages, with a conservative 4/3 padding.
+///
+/// Walks every content block in each message, handling text, tool_result,
+/// tool_use, thinking, redacted_thinking, image, and document blocks.
+/// Matches the TS `estimateMessageTokens`.
+pub fn estimate_message_tokens(messages: &[Value]) -> usize {
+    let mut total: usize = 0;
+
+    for msg in messages {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+
+        let content = match msg.get("content").and_then(|c| c.as_array()) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        for block in content {
+            let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match block_type {
+                "text" => {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                        total += estimate_tokens_for_text(text);
+                    }
+                }
+                "tool_result" => {
+                    total += calculate_tool_result_tokens(block);
+                }
+                "image" | "document" => {
+                    total += IMAGE_MAX_TOKEN_SIZE;
+                }
+                "thinking" => {
+                    if let Some(text) = block.get("thinking").and_then(|t| t.as_str()) {
+                        total += estimate_tokens_for_text(text);
+                    }
+                }
+                "redacted_thinking" => {
+                    if let Some(data) = block.get("data").and_then(|t| t.as_str()) {
+                        total += estimate_tokens_for_text(data);
+                    }
+                }
+                "tool_use" => {
+                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let input = block
+                        .get("input")
+                        .map(|i| i.to_string())
+                        .unwrap_or_else(|| "{}".to_string());
+                    total += estimate_tokens_for_text(&format!("{name}{input}"));
+                }
+                _ => {
+                    // server_tool_use, web_search_tool_result, etc.
+                    total += estimate_tokens_for_text(&block.to_string());
+                }
+            }
+        }
+    }
+
+    // Pad estimate by 4/3 to be conservative
+    (total as f64 * 4.0 / 3.0).ceil() as usize
+}
+
+/// Calculate token count for a tool_result content block.
+fn calculate_tool_result_tokens(block: &Value) -> usize {
+    let content = match block.get("content") {
+        Some(c) => c,
+        None => return 0,
+    };
+
+    if let Some(text) = content.as_str() {
+        return estimate_tokens_for_text(text);
+    }
+
+    if let Some(arr) = content.as_array() {
+        return arr
+            .iter()
+            .map(|item| {
+                let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match item_type {
+                    "text" => {
+                        let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                        estimate_tokens_for_text(text)
+                    }
+                    "image" | "document" => IMAGE_MAX_TOKEN_SIZE,
+                    _ => 0,
+                }
+            })
+            .sum();
+    }
+
+    0
+}
+
 /// Check whether the current message set should trigger auto-compaction.
 pub fn should_auto_compact(messages: &[Value], config: &CompactionConfig) -> bool {
-    let total: usize = messages.iter().map(estimate_tokens).sum();
+    if !config.auto_compact_enabled || !is_auto_compact_enabled() {
+        return false;
+    }
+    if is_auto_compact_circuit_broken() {
+        return false;
+    }
+    let total = estimate_message_tokens(messages);
     total > config.max_context_tokens
+}
+
+// ── Message grouping ────────────────────────────────────────────────────────
+
+/// Groups messages at API-round boundaries: one group per API round-trip.
+///
+/// A boundary fires when a NEW assistant response begins (different message id
+/// from the prior assistant). For well-formed conversations this is an API-safe
+/// split point — the API contract requires every tool_use to be resolved before
+/// the next assistant turn, so pairing validity falls out of the assistant-id
+/// boundary.
+///
+/// This matches the TS `groupMessagesByApiRound` from `grouping.ts`.
+pub fn group_messages_by_api_round(messages: &[Value]) -> Vec<Vec<Value>> {
+    let mut groups: Vec<Vec<Value>> = Vec::new();
+    let mut current: Vec<Value> = Vec::new();
+    let mut last_assistant_id: Option<String> = None;
+
+    for msg in messages {
+        let is_assistant = msg.get("role").and_then(|r| r.as_str()) == Some("assistant");
+        let msg_id = msg.get("id").and_then(|id| id.as_str()).map(String::from);
+
+        if is_assistant && msg_id != last_assistant_id && !current.is_empty() {
+            groups.push(std::mem::take(&mut current));
+            current.push(msg.clone());
+        } else {
+            current.push(msg.clone());
+        }
+
+        if is_assistant {
+            last_assistant_id = msg_id;
+        }
+    }
+
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    groups
+}
+
+/// Estimate the total token count for a group of messages.
+fn estimate_group_tokens(group: &[Value]) -> usize {
+    group.iter().map(estimate_tokens).sum()
+}
+
+// ── Compactable tool tracking ───────────────────────────────────────────────
+
+/// Tools whose results can be safely truncated during micro-compaction.
+/// Other tools (e.g. Agent, SendMessage) keep their results to preserve context.
+const COMPACTABLE_TOOLS: &[&str] = &[
+    "Read",
+    "Bash",
+    "Grep",
+    "Glob",
+    "WebSearch",
+    "WebFetch",
+    "Edit",
+    "Write",
+];
+
+/// Walk messages and collect tool_use IDs whose tool name is in
+/// COMPACTABLE_TOOLS, in encounter order. Shared by both microcompact paths.
+pub fn collect_compactable_tool_ids(messages: &[Value]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for msg in messages {
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                    if let (Some(id), Some(name)) = (
+                        block.get("id").and_then(|v| v.as_str()),
+                        block.get("name").and_then(|v| v.as_str()),
+                    ) {
+                        if COMPACTABLE_TOOLS.contains(&name) {
+                            ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Build a map of tool_use_id -> tool_name from assistant messages.
+fn build_tool_name_map(messages: &[Value]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for msg in messages {
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                    if let (Some(id), Some(name)) = (
+                        block.get("id").and_then(|v| v.as_str()),
+                        block.get("name").and_then(|v| v.as_str()),
+                    ) {
+                        map.insert(id.to_string(), name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+// ── Strip images from messages ──────────────────────────────────────────────
+
+/// Strip image and document blocks from user messages before sending for compaction.
+///
+/// Images are not needed for generating a conversation summary and can
+/// cause the compaction API call itself to hit the prompt-too-long limit.
+/// Replaces image blocks with a text marker so the summary still notes
+/// that an image was shared.
+pub fn strip_images_from_messages(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|msg| {
+            if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
+                return msg.clone();
+            }
+
+            let content = match msg.get("content").and_then(|c| c.as_array()) {
+                Some(c) => c,
+                None => return msg.clone(),
+            };
+
+            let mut has_media = false;
+            let new_content: Vec<Value> = content
+                .iter()
+                .flat_map(|block| {
+                    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match block_type {
+                        "image" => {
+                            has_media = true;
+                            vec![serde_json::json!({"type": "text", "text": "[image]"})]
+                        }
+                        "document" => {
+                            has_media = true;
+                            vec![serde_json::json!({"type": "text", "text": "[document]"})]
+                        }
+                        "tool_result" => {
+                            if let Some(inner) = block.get("content").and_then(|c| c.as_array()) {
+                                let mut tool_has_media = false;
+                                let new_inner: Vec<Value> = inner
+                                    .iter()
+                                    .map(|item| {
+                                        let item_type = item
+                                            .get("type")
+                                            .and_then(|t| t.as_str())
+                                            .unwrap_or("");
+                                        match item_type {
+                                            "image" => {
+                                                tool_has_media = true;
+                                                serde_json::json!({"type": "text", "text": "[image]"})
+                                            }
+                                            "document" => {
+                                                tool_has_media = true;
+                                                serde_json::json!({"type": "text", "text": "[document]"})
+                                            }
+                                            _ => item.clone(),
+                                        }
+                                    })
+                                    .collect();
+                                if tool_has_media {
+                                    has_media = true;
+                                    let mut new_block = block.clone();
+                                    new_block["content"] = Value::Array(new_inner);
+                                    vec![new_block]
+                                } else {
+                                    vec![block.clone()]
+                                }
+                            } else {
+                                vec![block.clone()]
+                            }
+                        }
+                        _ => vec![block.clone()],
+                    }
+                })
+                .collect();
+
+            if !has_media {
+                return msg.clone();
+            }
+
+            let mut new_msg = msg.clone();
+            new_msg["content"] = Value::Array(new_content);
+            new_msg
+        })
+        .collect()
 }
 
 // ── Compact prompt (ported from original TS) ────────────────────────────────
@@ -466,6 +981,21 @@ pub fn get_compact_user_summary_message(
     base
 }
 
+/// Merge user-supplied custom instructions with hook-provided instructions.
+/// User instructions come first; hook instructions are appended.
+/// Empty strings normalize to None.
+pub fn merge_hook_instructions(
+    user_instructions: Option<&str>,
+    hook_instructions: Option<&str>,
+) -> Option<String> {
+    match (user_instructions.filter(|s| !s.is_empty()), hook_instructions.filter(|s| !s.is_empty())) {
+        (None, None) => None,
+        (Some(u), None) => Some(u.to_string()),
+        (None, Some(h)) => Some(h.to_string()),
+        (Some(u), Some(h)) => Some(format!("{u}\n\n{h}")),
+    }
+}
+
 // ── Main entry point ─────────────────────────────────────────────────────────
 
 /// Compact the given messages using the specified strategy.
@@ -479,30 +1009,82 @@ pub async fn compact_messages(
     api_client: Option<&ApiClient>,
     system_prompt: &str,
 ) -> Result<CompactionResult> {
-    match strategy {
+    // Clear warning suppression at the start of a new compact attempt.
+    clear_compact_warning_suppression();
+
+    let result = match strategy {
         CompactionStrategy::Auto => auto_compact(messages, config, api_client, system_prompt).await,
         CompactionStrategy::Micro => Ok(micro_compact(messages, config)),
         CompactionStrategy::Snip => Ok(snip_compact(messages, config)),
         CompactionStrategy::Reactive => {
             reactive_compact(messages, config, api_client, system_prompt).await
         }
+    };
+
+    // On success, suppress the compact warning and reset failure count.
+    if result.is_ok() {
+        suppress_compact_warning();
+        reset_auto_compact_failures();
+    }
+
+    result
+}
+
+/// Auto-compact if the context exceeds the threshold.
+///
+/// Returns `Ok(Some(result))` if compaction was performed, `Ok(None)` if not needed.
+/// Implements the circuit breaker pattern: stops retrying after
+/// `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES` consecutive failures.
+pub async fn auto_compact_if_needed(
+    messages: &[Value],
+    config: &CompactionConfig,
+    api_client: Option<&ApiClient>,
+    system_prompt: &str,
+    tracking: &mut AutoCompactTrackingState,
+) -> Result<Option<CompactionResult>> {
+    if std::env::var("DISABLE_COMPACT").as_deref() == Ok("1") {
+        return Ok(None);
+    }
+
+    // Circuit breaker: stop retrying after N consecutive failures.
+    if tracking.consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES {
+        return Ok(None);
+    }
+
+    if !should_auto_compact(messages, config) {
+        return Ok(None);
+    }
+
+    match compact_messages(
+        messages,
+        &CompactionStrategy::Auto,
+        config,
+        api_client,
+        system_prompt,
+    )
+    .await
+    {
+        Ok(result) => {
+            tracking.compacted = true;
+            tracking.consecutive_failures = 0;
+            run_post_compact_cleanup();
+            Ok(Some(result))
+        }
+        Err(e) => {
+            tracking.consecutive_failures += 1;
+            if tracking.consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES {
+                tracing::warn!(
+                    "auto-compact circuit breaker tripped after {} consecutive failures — \
+                     skipping future attempts this session",
+                    tracking.consecutive_failures
+                );
+            }
+            Err(e)
+        }
     }
 }
 
 // ── Auto compact ─────────────────────────────────────────────────────────────
-
-/// Tools whose results can be safely truncated during micro-compaction.
-/// Other tools (e.g. Agent, SendMessage) keep their results to preserve context.
-const COMPACTABLE_TOOLS: &[&str] = &[
-    "Read",
-    "Bash",
-    "Grep",
-    "Glob",
-    "WebSearch",
-    "WebFetch",
-    "Edit",
-    "Write",
-];
 
 async fn auto_compact(
     messages: &[Value],
@@ -510,21 +1092,37 @@ async fn auto_compact(
     api_client: Option<&ApiClient>,
     _system_prompt: &str,
 ) -> Result<CompactionResult> {
-    let pre_tokens: usize = messages.iter().map(estimate_tokens).sum();
+    let pre_tokens = estimate_message_tokens(messages);
 
-    let keep_count = config.auto_keep_recent.min(messages.len());
-    let split_at = messages.len() - keep_count;
-    let older = &messages[..split_at];
-    let recent = &messages[split_at..];
+    if messages.is_empty() {
+        anyhow::bail!("Not enough messages to compact.");
+    }
+
+    // Use API-round grouping to find a safe split point that preserves
+    // tool_use/tool_result pairs.
+    let groups = group_messages_by_api_round(messages);
+    let keep_groups = config.auto_keep_recent.min(groups.len());
+    let split_at = groups.len().saturating_sub(keep_groups);
+
+    let older: Vec<Value> = groups[..split_at].iter().flatten().cloned().collect();
+    let recent: Vec<Value> = groups[split_at..].iter().flatten().cloned().collect();
+
+    if older.is_empty() {
+        anyhow::bail!("Not enough messages to compact.");
+    }
 
     let api_client =
         api_client.ok_or_else(|| anyhow::anyhow!("auto-compact requires an API client"))?;
+
+    // Strip images before sending to the summarizer — they waste tokens
+    // and can cause the compaction call itself to hit prompt-too-long.
+    let stripped_older = strip_images_from_messages(&older);
 
     // Use the exact structured prompt from the original TS implementation
     let compact_prompt = get_compact_prompt(None);
 
     // Extract tool use info from older messages for the summary annotation
-    let tool_infos = extract_tool_infos_from_messages(older);
+    let tool_infos = extract_tool_infos_from_messages(&older);
     let tool_summary_annotation = if !tool_infos.is_empty() {
         tool_use_summary::generate_simple_summary(&tool_infos)
             .map(|s| format!("\n\nTool activity summary: {s}"))
@@ -537,13 +1135,52 @@ async fn auto_compact(
         "role": "user",
         "content": [{
             "type": "text",
-            "text": format!("{compact_prompt}{tool_summary_annotation}\n\nMessages to summarize:\n{}", serde_json::to_string_pretty(older)?)
+            "text": format!("{compact_prompt}{tool_summary_annotation}\n\nMessages to summarize:\n{}", serde_json::to_string_pretty(&stripped_older)?)
         }]
     })];
 
-    let response = api_client.send_request(&summary_messages, &[], &[]).await?;
+    // Retry loop for prompt-too-long errors during summarization.
+    let mut messages_to_summarize = summary_messages;
+    let mut ptl_attempts = 0;
+    let response;
+
+    loop {
+        match api_client
+            .send_request(&messages_to_summarize, &[], &[])
+            .await
+        {
+            Ok(resp) => {
+                let text = extract_text_from_response(&resp);
+                if is_prompt_too_long_response(&text) && ptl_attempts < MAX_PTL_RETRIES {
+                    ptl_attempts += 1;
+                    // Truncate the oldest 20% of the content and retry
+                    if let Some(truncated) =
+                        truncate_head_for_ptl_retry(&stripped_older, ptl_attempts)
+                    {
+                        messages_to_summarize = vec![serde_json::json!({
+                            "role": "user",
+                            "content": [{
+                                "type": "text",
+                                "text": format!("{compact_prompt}{tool_summary_annotation}\n\nMessages to summarize:\n{}", serde_json::to_string_pretty(&truncated)?)
+                            }]
+                        })];
+                        continue;
+                    }
+                }
+                response = resp;
+                break;
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
 
     let response_text = extract_text_from_response(&response);
+    if response_text.is_empty() {
+        anyhow::bail!("Failed to generate conversation summary - response did not contain valid text content");
+    }
+
     let summary_text = format_compact_summary(&response_text);
 
     // Build the user summary message matching the TS format
@@ -554,8 +1191,13 @@ async fn auto_compact(
         !recent.is_empty(),
     );
 
-    // Build replacement messages: summary as a user message, then recent messages
-    let mut compacted = Vec::with_capacity(2 + recent.len());
+    // Build replacement messages: boundary marker, summary, then recent messages
+    let mut compacted = Vec::with_capacity(3 + recent.len());
+
+    // Insert compact boundary marker
+    let boundary = create_compact_boundary_message("auto", pre_tokens);
+    compacted.push(boundary);
+
     compacted.push(serde_json::json!({
         "role": "user",
         "content": [{
@@ -568,15 +1210,17 @@ async fn auto_compact(
         "role": "assistant",
         "content": [{"type": "text", "text": "Understood. I have the context from the summary. How can I help?"}]
     }));
-    compacted.extend_from_slice(recent);
+    compacted.extend(recent);
 
-    let post_tokens: usize = compacted.iter().map(estimate_tokens).sum();
+    let post_tokens = estimate_message_tokens(&compacted);
 
     Ok(CompactionResult {
         messages: compacted,
         summary: summary_text,
         pre_compact_tokens: pre_tokens,
         post_compact_tokens: post_tokens,
+        has_boundary_marker: true,
+        trigger: CompactionTrigger::Auto,
     })
 }
 
@@ -584,47 +1228,120 @@ async fn auto_compact(
 
 /// Run micro-compaction: truncate large tool results and merge adjacent thinking blocks.
 ///
-/// This is also used as a per-turn pre-pass (Q5) to keep context lean.
+/// This is also used as a per-turn pre-pass to keep context lean.
+/// Matches the TS microcompactMessages — walks messages and content-clears
+/// old compactable tool results, keeping only the most recent N.
 pub fn micro_compact(messages: &[Value], config: &CompactionConfig) -> CompactionResult {
-    let pre_tokens: usize = messages.iter().map(estimate_tokens).sum();
+    let pre_tokens = estimate_message_tokens(messages);
 
-    // Build a map of tool_use_id -> tool_name from assistant messages so we
-    // can selectively truncate only COMPACTABLE_TOOLS results.
-    let mut tool_names: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for msg in messages {
-        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
-            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-                for block in content {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                        if let (Some(id), Some(name)) = (
-                            block.get("id").and_then(|v| v.as_str()),
-                            block.get("name").and_then(|v| v.as_str()),
-                        ) {
-                            tool_names.insert(id.to_string(), name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let tool_names = build_tool_name_map(messages);
+
+    // Collect compactable tool IDs in encounter order
+    let compactable_ids = collect_compactable_tool_ids(messages);
+
+    // Keep only the most recent N tool results, clear the rest
+    let keep_recent = config.micro_keep_recent.max(1);
+    let keep_set: HashSet<String> = compactable_ids
+        .iter()
+        .rev()
+        .take(keep_recent)
+        .cloned()
+        .collect();
+    let clear_set: HashSet<String> = compactable_ids
+        .iter()
+        .filter(|id| !keep_set.contains(*id))
+        .cloned()
+        .collect();
+
+    let mut tokens_saved: usize = 0;
 
     let compacted: Vec<Value> = messages
         .iter()
-        .map(|msg| truncate_tool_results(msg, config.micro_truncate_threshold, &tool_names))
+        .map(|msg| {
+            let mut msg = msg.clone();
+            if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
+                // Also truncate large tool results based on threshold
+                return truncate_tool_results(&msg, config.micro_truncate_threshold, &tool_names);
+            }
+
+            if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+                let mut touched = false;
+                for block in content.iter_mut() {
+                    if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                        continue;
+                    }
+                    let tool_use_id = block
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    // Clear results for tools in the clear set
+                    if clear_set.contains(&tool_use_id) {
+                        let current_content = block.get("content");
+                        let already_cleared = current_content
+                            .and_then(|c| c.as_str())
+                            .map(|s| s == TIME_BASED_MC_CLEARED_MESSAGE)
+                            .unwrap_or(false);
+
+                        if !already_cleared {
+                            let block_tokens = calculate_tool_result_tokens(block);
+                            tokens_saved += block_tokens;
+                            touched = true;
+
+                            // Generate a summary label if we know the tool name
+                            let label = tool_names
+                                .get(&tool_use_id)
+                                .and_then(|name| {
+                                    let input = block
+                                        .get("input")
+                                        .cloned()
+                                        .unwrap_or(serde_json::json!({}));
+                                    tool_use_summary::generate_simple_summary(&[ToolInfo {
+                                        name: name.clone(),
+                                        input,
+                                        output: serde_json::json!("[truncated]"),
+                                    }])
+                                })
+                                .unwrap_or_else(|| TIME_BASED_MC_CLEARED_MESSAGE.to_string());
+
+                            block["content"] = serde_json::json!([{
+                                "type": "text",
+                                "text": label
+                            }]);
+                        }
+                        continue;
+                    }
+
+                    // For kept results, still apply the threshold-based truncation
+                    let _ = touched; // avoid unused warning
+                }
+
+                if !touched {
+                    // Apply threshold-based truncation for non-cleared results
+                    return truncate_tool_results(&msg, config.micro_truncate_threshold, &tool_names);
+                }
+            }
+
+            msg
+        })
         .collect();
 
     // Merge adjacent thinking blocks
     let compacted = merge_reasoning_blocks(compacted);
-    let post_tokens: usize = compacted.iter().map(estimate_tokens).sum();
+    let post_tokens = estimate_message_tokens(&compacted);
 
     CompactionResult {
         messages: compacted,
         summary: format!(
-            "Micro-compacted: {pre_tokens} -> {post_tokens} tokens (truncated large tool results)"
+            "Micro-compacted: {pre_tokens} -> {post_tokens} tokens \
+             (cleared {} tool results, ~{tokens_saved} tokens saved)",
+            clear_set.len()
         ),
         pre_compact_tokens: pre_tokens,
         post_compact_tokens: post_tokens,
+        has_boundary_marker: false,
+        trigger: CompactionTrigger::Manual,
     }
 }
 
@@ -633,7 +1350,7 @@ pub fn micro_compact(messages: &[Value], config: &CompactionConfig) -> Compactio
 fn truncate_tool_results(
     msg: &Value,
     threshold: usize,
-    tool_names: &std::collections::HashMap<String, String>,
+    tool_names: &HashMap<String, String>,
 ) -> Value {
     let mut msg = msg.clone();
     if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
@@ -675,7 +1392,7 @@ fn truncate_tool_results(
                                 output: serde_json::json!("[truncated]"),
                             },
                         ])
-                        .unwrap_or_else(|| "[Old tool result content cleared]".to_string());
+                        .unwrap_or_else(|| TIME_BASED_MC_CLEARED_MESSAGE.to_string());
 
                         *inner = serde_json::json!([{
                             "type": "text",
@@ -691,33 +1408,84 @@ fn truncate_tool_results(
 
 // ── Snip compact ─────────────────────────────────────────────────────────────
 
+/// Snip compaction: drop oldest message groups, keeping only the most recent N groups.
+///
+/// Uses API-round grouping to avoid splitting tool_use/tool_result pairs.
+/// Inserts a boundary marker showing where messages were snipped.
 fn snip_compact(messages: &[Value], config: &CompactionConfig) -> CompactionResult {
-    let pre_tokens: usize = messages.iter().map(estimate_tokens).sum();
+    let pre_tokens = estimate_message_tokens(messages);
 
-    let keep_count = config.snip_keep_recent.min(messages.len());
-    let compacted: Vec<Value> = messages[messages.len() - keep_count..].to_vec();
+    let groups = group_messages_by_api_round(messages);
+    let keep_groups = config.snip_keep_recent.min(groups.len());
+    let dropped_groups = groups.len().saturating_sub(keep_groups);
 
-    let post_tokens: usize = compacted.iter().map(estimate_tokens).sum();
+    // Count actual messages being dropped for the marker
+    let dropped_message_count: usize = groups[..dropped_groups]
+        .iter()
+        .map(|g| g.len())
+        .sum();
+
+    // Build the compacted messages: boundary marker + kept messages
+    let kept: Vec<Value> = groups[dropped_groups..].iter().flatten().cloned().collect();
+    let mut compacted = Vec::with_capacity(1 + kept.len());
+
+    // Insert snip boundary marker if we actually dropped messages
+    if dropped_message_count > 0 {
+        let boundary = create_snip_boundary_message(dropped_message_count, pre_tokens);
+        compacted.push(boundary);
+
+        // If the kept messages start with an assistant message, prepend a
+        // synthetic user marker so the conversation alternates properly.
+        if kept
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| r.as_str())
+            == Some("assistant")
+        {
+            compacted.push(serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": format!("... snipped {dropped_message_count} earlier messages ...")}]
+            }));
+        }
+    }
+
+    compacted.extend(kept);
+
+    let post_tokens = estimate_message_tokens(&compacted);
 
     CompactionResult {
         messages: compacted,
         summary: format!(
-            "Snip-compacted: dropped {} oldest messages, kept {keep_count}",
-            messages.len() - keep_count
+            "Snip-compacted: dropped {} message groups ({} messages), kept {}",
+            dropped_groups,
+            dropped_message_count,
+            keep_groups,
         ),
         pre_compact_tokens: pre_tokens,
         post_compact_tokens: post_tokens,
+        has_boundary_marker: dropped_message_count > 0,
+        trigger: CompactionTrigger::Manual,
     }
 }
 
 // ── Reactive compact ─────────────────────────────────────────────────────────
 
+/// Reactive compaction: triggered when the context window approaches limits.
+///
+/// Two-phase approach:
+/// 1. Try micro-compact first (cheap, no API call).
+/// 2. If still over budget, run auto-compact on the micro-compacted messages.
+///
+/// Uses token counting to determine the optimal split point for the auto phase,
+/// preserving as many recent messages as possible while staying under the target.
 async fn reactive_compact(
     messages: &[Value],
     config: &CompactionConfig,
     api_client: Option<&ApiClient>,
     system_prompt: &str,
 ) -> Result<CompactionResult> {
+    let original_pre_tokens = estimate_message_tokens(messages);
+
     // Phase 1: try micro-compact (cheap, no API call)
     let micro_result = micro_compact(messages, config);
 
@@ -728,25 +1496,281 @@ async fn reactive_compact(
                 "Reactive (micro phase sufficient): {}",
                 micro_result.summary
             ),
+            trigger: CompactionTrigger::Reactive,
             ..micro_result
         });
     }
 
-    // Phase 2: auto-compact the micro-compacted messages
-    let auto_result =
-        auto_compact(&micro_result.messages, config, api_client, system_prompt).await?;
+    // Phase 2: use API-round grouping to find the optimal split point.
+    // Peel groups from the oldest end until we free enough tokens.
+    let groups = group_messages_by_api_round(&micro_result.messages);
+
+    if groups.len() < 2 {
+        // Only one group — micro was all we could do without an API call.
+        // Fall through to auto-compact with all messages.
+        let auto_result = auto_compact(
+            &micro_result.messages,
+            config,
+            api_client,
+            system_prompt,
+        )
+        .await?;
+
+        return Ok(CompactionResult {
+            summary: format!(
+                "Reactive (both phases): micro {} -> {} tokens, then auto {} -> {} tokens",
+                original_pre_tokens,
+                micro_result.post_compact_tokens,
+                auto_result.pre_compact_tokens,
+                auto_result.post_compact_tokens,
+            ),
+            pre_compact_tokens: original_pre_tokens,
+            trigger: CompactionTrigger::Reactive,
+            ..auto_result
+        });
+    }
+
+    // Find the split point where recent groups fit within the target budget.
+    let target = config.target_after_compact;
+    let mut keep_start = groups.len();
+    let mut running_tokens = 0usize;
+
+    for (i, group) in groups.iter().enumerate().rev() {
+        let group_tokens = estimate_group_tokens(group);
+        if running_tokens + group_tokens > target {
+            break;
+        }
+        running_tokens += group_tokens;
+        keep_start = i;
+    }
+
+    // Ensure we keep at least one group
+    keep_start = keep_start.min(groups.len() - 1);
+
+    let older: Vec<Value> = groups[..keep_start].iter().flatten().cloned().collect();
+    let recent: Vec<Value> = groups[keep_start..].iter().flatten().cloned().collect();
+
+    if older.is_empty() {
+        // Nothing to summarize — the recent messages alone are over budget.
+        // Run auto-compact on everything.
+        let auto_result = auto_compact(
+            &micro_result.messages,
+            config,
+            api_client,
+            system_prompt,
+        )
+        .await?;
+
+        return Ok(CompactionResult {
+            summary: format!(
+                "Reactive (both phases, full): micro {} -> {} tokens, then auto {} -> {} tokens",
+                original_pre_tokens,
+                micro_result.post_compact_tokens,
+                auto_result.pre_compact_tokens,
+                auto_result.post_compact_tokens,
+            ),
+            pre_compact_tokens: original_pre_tokens,
+            trigger: CompactionTrigger::Reactive,
+            ..auto_result
+        });
+    }
+
+    // Summarize the older messages via the API
+    let api_client =
+        api_client.ok_or_else(|| anyhow::anyhow!("reactive-compact requires an API client"))?;
+
+    let stripped_older = strip_images_from_messages(&older);
+    let compact_prompt = get_compact_prompt(None);
+
+    let tool_infos = extract_tool_infos_from_messages(&older);
+    let tool_summary_annotation = if !tool_infos.is_empty() {
+        tool_use_summary::generate_simple_summary(&tool_infos)
+            .map(|s| format!("\n\nTool activity summary: {s}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let summary_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": [{
+            "type": "text",
+            "text": format!("{compact_prompt}{tool_summary_annotation}\n\nMessages to summarize:\n{}", serde_json::to_string_pretty(&stripped_older)?)
+        }]
+    })];
+
+    let response = api_client.send_request(&summary_messages, &[], &[]).await?;
+    let response_text = extract_text_from_response(&response);
+
+    if response_text.is_empty() {
+        anyhow::bail!("Failed to generate conversation summary during reactive compact");
+    }
+
+    let _summary_text = format_compact_summary(&response_text);
+    let user_summary = get_compact_user_summary_message(
+        &response_text,
+        true,
+        None,
+        !recent.is_empty(),
+    );
+
+    // Build: boundary + summary + ack + recent
+    let mut compacted = Vec::with_capacity(3 + recent.len());
+    let boundary = create_compact_boundary_message("reactive", original_pre_tokens);
+    compacted.push(boundary);
+
+    compacted.push(serde_json::json!({
+        "role": "user",
+        "content": [{"type": "text", "text": user_summary}]
+    }));
+    compacted.push(serde_json::json!({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Understood. I have the context from the summary. How can I help?"}]
+    }));
+    compacted.extend(recent);
+
+    let post_tokens = estimate_message_tokens(&compacted);
 
     Ok(CompactionResult {
+        messages: compacted,
         summary: format!(
-            "Reactive (both phases): micro {} -> {} tokens, then auto {} -> {} tokens",
-            micro_result.pre_compact_tokens,
+            "Reactive (both phases): micro {} -> {} tokens, then summarized older ({} groups), \
+             final {} tokens",
+            original_pre_tokens,
             micro_result.post_compact_tokens,
-            auto_result.pre_compact_tokens,
-            auto_result.post_compact_tokens,
+            keep_start,
+            post_tokens,
         ),
-        pre_compact_tokens: micro_result.pre_compact_tokens,
-        ..auto_result
+        pre_compact_tokens: original_pre_tokens,
+        post_compact_tokens: post_tokens,
+        has_boundary_marker: true,
+        trigger: CompactionTrigger::Reactive,
     })
+}
+
+// ── Compact boundary markers ────────────────────────────────────────────────
+
+/// Create a compact boundary message that marks where compaction occurred.
+///
+/// The boundary message is a system-type message that includes:
+/// - The trigger type (auto, manual, reactive)
+/// - The pre-compaction token count
+/// - A timestamp
+pub fn create_compact_boundary_message(trigger: &str, pre_compact_tokens: usize) -> Value {
+    serde_json::json!({
+        "role": "system",
+        "type": "compact_boundary",
+        "subtype": "compact_boundary",
+        "trigger": trigger,
+        "pre_compact_tokens": pre_compact_tokens,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "content": [{
+            "type": "text",
+            "text": format!(
+                "[Conversation compacted ({trigger}): ~{pre_compact_tokens} tokens summarized]"
+            )
+        }]
+    })
+}
+
+/// Create a snip boundary message showing how many messages were removed.
+fn create_snip_boundary_message(dropped_count: usize, pre_compact_tokens: usize) -> Value {
+    serde_json::json!({
+        "role": "system",
+        "type": "compact_boundary",
+        "subtype": "compact_boundary",
+        "trigger": "snip",
+        "pre_compact_tokens": pre_compact_tokens,
+        "dropped_messages": dropped_count,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "content": [{
+            "type": "text",
+            "text": format!(
+                "[Conversation snipped: {dropped_count} earlier messages removed]"
+            )
+        }]
+    })
+}
+
+// ── Post-compact cleanup ────────────────────────────────────────────────────
+
+/// Run cleanup of caches and tracking state after compaction.
+///
+/// Call this after both auto-compact and manual /compact to free memory
+/// held by tracking structures that are invalidated by compaction.
+///
+/// Resets:
+/// - Microcompact warning suppression state
+/// - Auto-compact failure counter
+pub fn run_post_compact_cleanup() {
+    // Reset microcompact state so stale tool IDs don't accumulate
+    clear_compact_warning_suppression();
+    reset_auto_compact_failures();
+
+    tracing::debug!("post-compact cleanup complete");
+}
+
+// ── Prompt-too-long retry helpers ───────────────────────────────────────────
+
+/// Check if a response indicates a prompt-too-long error.
+fn is_prompt_too_long_response(text: &str) -> bool {
+    text.starts_with("Conversation too long")
+        || text.contains("prompt is too long")
+        || text.contains("prompt_too_long")
+}
+
+/// Truncate the oldest messages for a prompt-too-long retry.
+///
+/// Drops approximately 20% * attempt of the messages from the front.
+/// Returns None if nothing can be dropped.
+fn truncate_head_for_ptl_retry(messages: &[Value], attempt: usize) -> Option<Vec<Value>> {
+    if messages.len() < 2 {
+        return None;
+    }
+
+    // Strip our own synthetic marker from a previous retry before grouping.
+    let input: &[Value] = if messages
+        .first()
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|b| b.get("text"))
+        .and_then(|t| t.as_str())
+        == Some(PTL_RETRY_MARKER)
+    {
+        &messages[1..]
+    } else {
+        messages
+    };
+
+    let groups = group_messages_by_api_round(input);
+    if groups.len() < 2 {
+        return None;
+    }
+
+    // Drop 20% per attempt, at least 1 group
+    let drop_count = (groups.len() * 20 * attempt / 100).max(1).min(groups.len() - 1);
+
+    let mut result: Vec<Value> = groups[drop_count..].iter().flatten().cloned().collect();
+
+    // If the result starts with an assistant message, prepend a synthetic user marker
+    if result
+        .first()
+        .and_then(|m| m.get("role"))
+        .and_then(|r| r.as_str())
+        == Some("assistant")
+    {
+        result.insert(
+            0,
+            serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": PTL_RETRY_MARKER}],
+                "isMeta": true
+            }),
+        );
+    }
+
+    Some(result)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -877,8 +1901,7 @@ fn strip_xml_tag(text: &str, tag: &str) -> String {
 /// Scans assistant messages for `tool_use` blocks and pairs them with their
 /// results (from subsequent `tool_result` blocks) to build `ToolInfo` entries.
 pub(crate) fn extract_tool_infos_from_messages(messages: &[Value]) -> Vec<ToolInfo> {
-    let mut tool_map: std::collections::HashMap<String, ToolInfo> =
-        std::collections::HashMap::new();
+    let mut tool_map: HashMap<String, ToolInfo> = HashMap::new();
 
     for msg in messages {
         if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
@@ -940,6 +1963,26 @@ mod tests {
         })
     }
 
+    fn make_assistant_msg_with_id(text: &str, id: &str) -> Value {
+        serde_json::json!({
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "text", "text": text}]
+        })
+    }
+
+    fn make_tool_use_msg(tool_use_id: &str, tool_name: &str) -> Value {
+        serde_json::json!({
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "id": tool_use_id,
+                "name": tool_name,
+                "input": {"path": "/test/file.rs"}
+            }]
+        })
+    }
+
     fn make_tool_result_msg(content_text: &str) -> Value {
         serde_json::json!({
             "role": "user",
@@ -951,12 +1994,42 @@ mod tests {
         })
     }
 
+    fn make_tool_result_msg_with_id(content_text: &str, tool_use_id: &str) -> Value {
+        serde_json::json!({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": [{"type": "text", "text": content_text}]
+            }]
+        })
+    }
+
     #[test]
     fn test_estimate_tokens() {
         let text = "Hello, world!"; // 13 chars
         let tokens = estimate_tokens_for_text(text);
         assert!(tokens > 0);
         assert!(tokens < 20); // Sanity check
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_conservative() {
+        let messages = vec![
+            make_user_msg("Hello"),
+            make_assistant_msg("World"),
+        ];
+        let tokens = estimate_message_tokens(&messages);
+        // estimate_message_tokens walks inner text blocks and pads by 4/3.
+        // It should be strictly positive for non-empty messages.
+        assert!(tokens > 0, "estimate_message_tokens should be positive for non-empty messages");
+        // The inner-text token sum before padding
+        let inner_raw: usize = ["Hello", "World"]
+            .iter()
+            .map(|t| estimate_tokens_for_text(t))
+            .sum();
+        let padded = (inner_raw as f64 * 4.0 / 3.0).ceil() as usize;
+        assert_eq!(tokens, padded, "estimate_message_tokens should equal padded inner-text estimate");
     }
 
     #[test]
@@ -983,28 +2056,75 @@ mod tests {
     }
 
     #[test]
+    fn test_should_auto_compact_disabled() {
+        let config = CompactionConfig {
+            max_context_tokens: 10,
+            auto_compact_enabled: false,
+            ..Default::default()
+        };
+        let messages = vec![
+            make_user_msg(&"x".repeat(500)),
+        ];
+        assert!(!should_auto_compact(&messages, &config));
+    }
+
+    #[test]
     fn test_snip_compact() {
         let config = CompactionConfig {
             snip_keep_recent: 2,
             ..Default::default()
         };
+        // Use assistant messages with distinct IDs so group_messages_by_api_round
+        // creates separate groups at each new assistant id boundary.
         let messages = vec![
             make_user_msg("first"),
-            make_assistant_msg("second"),
+            make_assistant_msg_with_id("second", "id1"),
             make_user_msg("third"),
-            make_assistant_msg("fourth"),
+            make_assistant_msg_with_id("fourth", "id2"),
         ];
         let result = snip_compact(&messages, &config);
-        assert_eq!(result.messages.len(), 2);
-        // Should keep the last 2
-        assert!(result.messages[0].to_string().contains("third"));
-        assert!(result.messages[1].to_string().contains("fourth"));
+        // Should have boundary + kept messages
+        assert!(result.has_boundary_marker);
+        assert!(result.summary.contains("Snip-compacted"));
+        // Last messages should contain "fourth"
+        let all_text = result
+            .messages
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<String>();
+        assert!(all_text.contains("fourth"));
+    }
+
+    #[test]
+    fn test_snip_compact_with_boundary_marker() {
+        let config = CompactionConfig {
+            snip_keep_recent: 1,
+            ..Default::default()
+        };
+        // Use distinct assistant IDs so group_messages_by_api_round creates
+        // multiple groups, allowing snip_compact to actually drop some.
+        let messages = vec![
+            make_user_msg("old1"),
+            make_assistant_msg_with_id("old2", "id1"),
+            make_user_msg("recent"),
+            make_assistant_msg_with_id("recent2", "id2"),
+        ];
+        let result = snip_compact(&messages, &config);
+        assert!(result.has_boundary_marker);
+        // Check that the boundary message is present
+        let first = &result.messages[0];
+        let text = first.to_string();
+        assert!(
+            text.contains("compact_boundary") || text.contains("snipped"),
+            "First message should be a boundary marker or snip indicator"
+        );
     }
 
     #[test]
     fn test_micro_compact_truncates_large_results() {
         let config = CompactionConfig {
             micro_truncate_threshold: 10,
+            micro_keep_recent: 100, // Keep all for this test
             ..Default::default()
         };
         let big_content = "x".repeat(10_000);
@@ -1020,6 +2140,7 @@ mod tests {
     fn test_micro_compact_preserves_small_results() {
         let config = CompactionConfig {
             micro_truncate_threshold: 100_000,
+            micro_keep_recent: 100,
             ..Default::default()
         };
         let messages = vec![make_tool_result_msg("small result")];
@@ -1027,6 +2148,27 @@ mod tests {
         let text = result.messages[0].to_string();
         assert!(text.contains("small result"));
         assert!(!text.contains("cleared"));
+    }
+
+    #[test]
+    fn test_micro_compact_clears_old_tool_results() {
+        let config = CompactionConfig {
+            micro_truncate_threshold: 100_000,
+            micro_keep_recent: 1, // Keep only the most recent
+            ..Default::default()
+        };
+        let messages = vec![
+            make_tool_use_msg("tool1", "Read"),
+            make_tool_result_msg_with_id("old result content", "tool1"),
+            make_tool_use_msg("tool2", "Read"),
+            make_tool_result_msg_with_id("recent result content", "tool2"),
+        ];
+        let result = micro_compact(&messages, &config);
+        let all_text: String = result.messages.iter().map(|m| m.to_string()).collect();
+        // Recent should be preserved
+        assert!(all_text.contains("recent result content"));
+        // Old should be cleared
+        assert!(!all_text.contains("old result content"));
     }
 
     #[test]
@@ -1084,6 +2226,8 @@ mod tests {
         assert_eq!(config.max_context_tokens, 180_000);
         assert_eq!(config.target_after_compact, 80_000);
         assert_eq!(config.auto_keep_recent, 4);
+        assert!(config.auto_compact_enabled);
+        assert_eq!(config.micro_keep_recent, 10);
     }
 
     #[test]
@@ -1095,6 +2239,7 @@ mod tests {
         let messages = vec![make_user_msg("only one")];
         let result = snip_compact(&messages, &config);
         assert_eq!(result.messages.len(), 1);
+        assert!(!result.has_boundary_marker);
     }
 
     #[tokio::test]
@@ -1182,5 +2327,189 @@ mod tests {
         assert!(msg.contains("/path/to/transcript"));
         assert!(msg.contains("Recent messages are preserved"));
         assert!(msg.contains("Resume directly"));
+    }
+
+    #[test]
+    fn test_group_messages_by_api_round() {
+        let messages = vec![
+            make_user_msg("q1"),
+            make_assistant_msg_with_id("a1", "id1"),
+            make_user_msg("q2"),
+            make_assistant_msg_with_id("a2", "id2"),
+        ];
+        let groups = group_messages_by_api_round(&messages);
+        // A new group starts each time a NEW assistant id appears.
+        // group1=[user("q1")], group2=[assistant("a1",id1), user("q2")], group3=[assistant("a2",id2)]
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].len(), 1); // user
+        assert_eq!(groups[1].len(), 2); // assistant (id1) + user
+        assert_eq!(groups[2].len(), 1); // assistant (id2)
+    }
+
+    #[test]
+    fn test_group_messages_keeps_tool_pairs() {
+        let messages = vec![
+            make_user_msg("q1"),
+            make_assistant_msg_with_id("thinking...", "id1"),
+            make_tool_use_msg("tu1", "Read"),
+            make_tool_result_msg_with_id("file contents", "tu1"),
+        ];
+        // group1=[user("q1")], group2=[assistant(id1)],
+        // group3=[tool_use(assistant,no id) + tool_result(user)]
+        // tool_use has role=assistant and msg_id=None which differs from last_assistant_id=Some("id1"),
+        // so it starts a new group.
+        let groups = group_messages_by_api_round(&messages);
+        assert_eq!(groups.len(), 3);
+    }
+
+    #[test]
+    fn test_collect_compactable_tool_ids() {
+        let messages = vec![
+            make_tool_use_msg("tu1", "Read"),
+            make_tool_use_msg("tu2", "Agent"), // Not compactable
+            make_tool_use_msg("tu3", "Bash"),
+        ];
+        let ids = collect_compactable_tool_ids(&messages);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"tu1".to_string()));
+        assert!(ids.contains(&"tu3".to_string()));
+        assert!(!ids.contains(&"tu2".to_string()));
+    }
+
+    #[test]
+    fn test_compact_boundary_message() {
+        let boundary = create_compact_boundary_message("auto", 150_000);
+        assert_eq!(
+            boundary.get("type").and_then(|t| t.as_str()),
+            Some("compact_boundary")
+        );
+        assert_eq!(
+            boundary.get("trigger").and_then(|t| t.as_str()),
+            Some("auto")
+        );
+        assert_eq!(
+            boundary.get("pre_compact_tokens").and_then(|t| t.as_u64()),
+            Some(150_000)
+        );
+    }
+
+    #[test]
+    fn test_compact_warning_suppression() {
+        // Reset state
+        clear_compact_warning_suppression();
+        assert!(!is_compact_warning_suppressed());
+
+        suppress_compact_warning();
+        assert!(is_compact_warning_suppressed());
+
+        clear_compact_warning_suppression();
+        assert!(!is_compact_warning_suppressed());
+    }
+
+    #[test]
+    fn test_token_warning_state() {
+        let state = calculate_token_warning_state(0, "claude-sonnet-4-20250514");
+        assert!(!state.is_above_warning_threshold);
+        assert!(!state.is_above_error_threshold);
+        assert!(!state.is_at_blocking_limit);
+        assert!(state.percent_left > 0);
+    }
+
+    #[test]
+    fn test_merge_hook_instructions() {
+        assert_eq!(merge_hook_instructions(None, None), None);
+        assert_eq!(
+            merge_hook_instructions(Some("user"), None),
+            Some("user".to_string())
+        );
+        assert_eq!(
+            merge_hook_instructions(None, Some("hook")),
+            Some("hook".to_string())
+        );
+        assert_eq!(
+            merge_hook_instructions(Some("user"), Some("hook")),
+            Some("user\n\nhook".to_string())
+        );
+        assert_eq!(merge_hook_instructions(Some(""), None), None);
+    }
+
+    #[test]
+    fn test_strip_images_from_messages() {
+        let messages = vec![
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Look at this"},
+                    {"type": "image", "source": {"data": "base64..."}}
+                ]
+            }),
+            make_assistant_msg("I see it"),
+        ];
+        let stripped = strip_images_from_messages(&messages);
+        assert_eq!(stripped.len(), 2);
+        let content = stripped[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[1]["text"], "[image]");
+        // Assistant message unchanged
+        assert_eq!(stripped[1], messages[1]);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_handles_all_block_types() {
+        let messages = vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "let me think..."},
+                    {"type": "text", "text": "here is my answer"},
+                    {"type": "tool_use", "name": "Read", "id": "tu1", "input": {"path": "/test"}}
+                ]
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "tu1", "content": "file contents"},
+                    {"type": "image", "source": {"data": "..."}}
+                ]
+            }),
+        ];
+        let tokens = estimate_message_tokens(&messages);
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn test_truncate_head_for_ptl_retry() {
+        // Use distinct assistant IDs so group_messages_by_api_round creates
+        // multiple groups, allowing truncation to actually drop some.
+        let messages = vec![
+            make_user_msg("q1"),
+            make_assistant_msg_with_id("a1", "id1"),
+            make_user_msg("q2"),
+            make_assistant_msg_with_id("a2", "id2"),
+            make_user_msg("q3"),
+            make_assistant_msg_with_id("a3", "id3"),
+        ];
+        let result = truncate_head_for_ptl_retry(&messages, 1);
+        assert!(result.is_some());
+        let truncated = result.unwrap();
+        // At least one group is dropped; the result may include a synthetic
+        // user marker if it starts with an assistant message, so we verify
+        // the content excludes the first group's user message.
+        let all_text: String = truncated.iter().map(|m| m.to_string()).collect();
+        assert!(!all_text.contains("\"q1\""), "first group should have been dropped");
+    }
+
+    #[test]
+    fn test_truncate_head_for_ptl_retry_too_few_messages() {
+        let messages = vec![make_user_msg("only one")];
+        assert!(truncate_head_for_ptl_retry(&messages, 1).is_none());
+    }
+
+    #[test]
+    fn test_auto_compact_tracking_state_default() {
+        let state = AutoCompactTrackingState::default();
+        assert!(!state.compacted);
+        assert_eq!(state.turn_counter, 0);
+        assert_eq!(state.consecutive_failures, 0);
     }
 }

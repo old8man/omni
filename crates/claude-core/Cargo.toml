@@ -29,6 +29,8 @@ lazy-regex = "3"
 libc = "0.2"
 regex = "1.12.3"
 once_cell = "1"
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+notify-debouncer-mini = "0.5"
 
 [features]
 default = ["bridge", "voice", "coordinator"]

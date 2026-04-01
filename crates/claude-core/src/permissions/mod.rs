@@ -1,6 +1,12 @@
 pub mod auto_mode;
 pub mod bash_classifier;
 pub mod classifier;
+pub mod dangerous_patterns;
 pub mod evaluator;
+pub mod permission_explainer;
+pub mod permission_mode;
 pub mod rule_parser;
+pub mod shadow_detection;
+pub mod shell_matching;
 pub mod types;
+pub mod yolo_classifier;

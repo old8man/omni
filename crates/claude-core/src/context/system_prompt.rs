@@ -28,6 +28,19 @@ pub const DEFAULT_AGENT_PROMPT: &str = "You are an agent for Claude Code, Anthro
     complete the task, respond with a concise report covering what was done and any key \
     findings — the caller will relay this to the user, so it only needs the essentials.";
 
+/// Configuration for a custom output style that changes how Claude responds.
+/// Mirrors the TypeScript `OutputStyleConfig` from `constants/outputStyles.ts`.
+#[derive(Debug, Clone)]
+pub struct OutputStyleConfig {
+    /// Display name of the output style (e.g., "Explanatory", "Formal").
+    pub name: String,
+    /// The prompt instructions that define how the model should respond.
+    pub prompt: String,
+    /// When true, the standard "Doing tasks" coding instructions are kept alongside
+    /// the output style prompt. When false, they are omitted.
+    pub keep_coding_instructions: bool,
+}
+
 /// Build the attribution header that identifies this as a Claude Code request.
 /// Must be the first block in the system prompt for proper billing/rate limits.
 fn build_attribution_header() -> String {
@@ -53,6 +66,7 @@ pub async fn build_system_prompt(
         None,
         None,
         None,
+        None,
     )
     .await
 }
@@ -68,6 +82,7 @@ pub async fn build_system_prompt_full(
     memory_prompt: Option<&str>,
     mcp_instructions: Option<&str>,
     language_preference: Option<&str>,
+    output_style: Option<&OutputStyleConfig>,
 ) -> Result<Vec<Value>> {
     // --- Attribution header (required for Claude Code billing/rate limits) ---
     // This must be the FIRST system prompt block, matching the original Claude Code.
@@ -75,40 +90,56 @@ pub async fn build_system_prompt_full(
 
     let mut sections: Vec<String> = vec![
         attribution,
-        get_intro_section(),
+        get_intro_section(output_style),
         get_system_section(),
-        get_doing_tasks_section(),
-        get_actions_section(),
-        get_using_tools_section(enabled_tool_names),
-        get_tone_and_style_section(),
-        get_output_efficiency_section(),
-        SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string(),
     ];
 
-    // --- Dynamic content (session-specific) ---
+    // The "Doing tasks" section is conditionally included:
+    // - Always included when there is no output style override
+    // - Only included when the output style explicitly keeps coding instructions
+    if output_style.is_none()
+        || output_style
+            .map(|s| s.keep_coding_instructions)
+            .unwrap_or(false)
+    {
+        sections.push(get_doing_tasks_section());
+    }
 
-    // 8. Session-specific guidance
+    sections.push(get_actions_section());
+    sections.push(get_using_tools_section(enabled_tool_names));
+    sections.push(get_tone_and_style_section());
+    sections.push(get_output_efficiency_section());
+    sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
+
+    // --- Dynamic content (session-specific, post cache boundary) ---
+
+    // Session-specific guidance (includes Agent tool, explore agents, skills)
     if let Some(guidance) = get_session_specific_guidance(enabled_tool_names) {
         sections.push(guidance);
     }
 
-    // 9. Memory / CLAUDE.md
+    // Memory / CLAUDE.md
     if let Some(mem) = memory_prompt {
         if !mem.is_empty() {
             sections.push(mem.to_string());
         }
     }
 
-    // 10. Environment info
+    // Environment info
     let is_git = get_git_context(project_root).await.ok().flatten().is_some();
     sections.push(compute_env_info(model, project_root, is_git).await);
 
-    // 11. Language preference
+    // Language preference
     if let Some(lang) = language_preference {
         sections.push(get_language_section(lang));
     }
 
-    // 12. MCP server instructions
+    // Output style
+    if let Some(style) = output_style {
+        sections.push(get_output_style_section(style));
+    }
+
+    // MCP server instructions
     if let Some(mcp) = mcp_instructions {
         if !mcp.is_empty() {
             sections.push(format!(
@@ -120,12 +151,17 @@ pub async fn build_system_prompt_full(
         }
     }
 
-    // 13. Scratchpad instructions (always enabled)
+    // Scratchpad instructions
     if let Some(scratchpad) = get_scratchpad_instructions() {
         sections.push(scratchpad);
     }
 
-    // 14. Function result clearing hint
+    // Function result clearing
+    if let Some(frc) = get_function_result_clearing_section(model) {
+        sections.push(frc);
+    }
+
+    // Summarize tool results guidance
     sections.push(
         "When working with tool results, write down any important information you might need \
          later in your response, as the original tool result may be cleared later."
@@ -143,15 +179,24 @@ pub async fn build_system_prompt_full(
 }
 
 /// Intro section — describes what the agent is and its core purpose.
-fn get_intro_section() -> String {
+/// When an output style is configured, the intro adjusts to reference the output style
+/// instead of defaulting to "software engineering tasks".
+fn get_intro_section(output_style: Option<&OutputStyleConfig>) -> String {
+    let role_description = if output_style.is_some() {
+        "according to your \"Output Style\" below, which describes how you should respond \
+         to user queries."
+    } else {
+        "with software engineering tasks."
+    };
+
     format!(
-        "\nYou are an interactive agent that helps users with software engineering tasks. \
+        "\nYou are an interactive agent that helps users {} \
          Use the instructions below and the tools available to you to assist the user.\n\n\
          {}\n\
          IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident \
          that the URLs are for helping the user with programming. You may use URLs provided by the \
          user in their messages or local files.",
-        CYBER_RISK_INSTRUCTION
+        role_description, CYBER_RISK_INSTRUCTION
     )
 }
 
@@ -327,6 +372,10 @@ fn get_actions_section() -> String {
 }
 
 /// Using your tools section — tool preference hierarchy.
+///
+/// In the TS original, Agent/explore/skills guidance lives in the
+/// session-specific section (post cache boundary). This section only covers
+/// dedicated-tool preference, task tracking, and parallel calling.
 fn get_using_tools_section(enabled_tools: &[String]) -> String {
     let tool_set: std::collections::HashSet<&str> =
         enabled_tools.iter().map(|s| s.as_str()).collect();
@@ -338,9 +387,6 @@ fn get_using_tools_section(enabled_tools: &[String]) -> String {
     } else {
         None
     };
-
-    let has_agent = tool_set.contains("Agent");
-    let has_skills = tool_set.contains("Skill");
 
     let mut items: Vec<String> = Vec::new();
 
@@ -371,40 +417,6 @@ fn get_using_tools_section(enabled_tools: &[String]) -> String {
              before marking them as completed.",
             task_tool
         ));
-    }
-
-    if has_agent {
-        items.push(
-            "Use the Agent tool with specialized agents when the task at hand matches the agent's \
-             description. Subagents are valuable for parallelizing independent queries or for \
-             protecting the main context window from excessive results, but they should not be used \
-             excessively when not needed. Importantly, avoid duplicating work that subagents are \
-             already doing - if you delegate research to a subagent, do not also perform the same \
-             searches yourself."
-                .to_string(),
-        );
-        items.push(
-            "For simple, directed codebase searches (e.g. for a specific file/class/function) use \
-             the Glob or Grep directly."
-                .to_string(),
-        );
-        items.push(
-            "For broader codebase exploration and deep research, use the Agent tool with \
-             subagent_type=Explore. This is slower than using the Glob or Grep directly, so use \
-             this only when a simple, directed search proves to be insufficient or when your task \
-             will clearly require more than 3 queries."
-                .to_string(),
-        );
-    }
-
-    if has_skills {
-        items.push(
-            "/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable \
-             skill. When executed, the skill gets expanded to a full prompt. Use the Skill tool to \
-             execute them. IMPORTANT: Only use Skill for skills listed in its user-invocable \
-             skills section - do not guess or use built-in CLI commands."
-                .to_string(),
-        );
     }
 
     items.push(
@@ -470,12 +482,18 @@ fn get_output_efficiency_section() -> String {
 }
 
 /// Session-specific guidance (post cache boundary).
+///
+/// Matches the TS `getSessionSpecificGuidanceSection()`. This section lives
+/// after the dynamic boundary because its contents depend on runtime state
+/// (enabled tools, session type) that would fragment the global cache prefix.
 fn get_session_specific_guidance(enabled_tools: &[String]) -> Option<String> {
     let tool_set: std::collections::HashSet<&str> =
         enabled_tools.iter().map(|s| s.as_str()).collect();
 
     let has_ask_user = tool_set.contains("AskUserQuestion");
     let has_agent = tool_set.contains("Agent");
+    let has_skills = tool_set.contains("Skill");
+    let has_discover_skills = tool_set.contains("DiscoverSkills");
 
     let mut items: Vec<String> = Vec::new();
 
@@ -494,16 +512,67 @@ fn get_session_specific_guidance(enabled_tools: &[String]) -> Option<String> {
             .to_string(),
     );
 
-    // Verification agent guidance (always enabled)
+    // Agent tool guidance
+    if has_agent {
+        items.push(
+            "Use the Agent tool with specialized agents when the task at hand matches the agent's \
+             description. Subagents are valuable for parallelizing independent queries or for \
+             protecting the main context window from excessive results, but they should not be used \
+             excessively when not needed. Importantly, avoid duplicating work that subagents are \
+             already doing - if you delegate research to a subagent, do not also perform the same \
+             searches yourself."
+                .to_string(),
+        );
+
+        // Explore agent guidance
+        items.push(
+            "For simple, directed codebase searches (e.g. for a specific file/class/function) use \
+             the Glob or Grep directly."
+                .to_string(),
+        );
+        items.push(
+            "For broader codebase exploration and deep research, use the Agent tool with \
+             subagent_type=Explore. This is slower than using the Glob or Grep directly, so use \
+             this only when a simple, directed search proves to be insufficient or when your task \
+             will clearly require more than 3 queries."
+                .to_string(),
+        );
+    }
+
+    // Skills guidance
+    if has_skills {
+        items.push(
+            "/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable \
+             skill. When executed, the skill gets expanded to a full prompt. Use the Skill tool to \
+             execute them. IMPORTANT: Only use Skill for skills listed in its user-invocable \
+             skills section - do not guess or use built-in CLI commands."
+                .to_string(),
+        );
+    }
+
+    // Skill discovery guidance
+    if has_discover_skills && has_skills {
+        items.push(
+            "Relevant skills are automatically surfaced each turn as \"Skills relevant to your \
+             task:\" reminders. If you're about to do something those don't cover \u{2014} a \
+             mid-task pivot, an unusual workflow, a multi-step plan \u{2014} call DiscoverSkills \
+             with a specific description of what you're doing. Skills already visible or loaded \
+             are filtered automatically. Skip this if the surfaced skills already cover your \
+             next action."
+                .to_string(),
+        );
+    }
+
+    // Verification agent guidance
     if has_agent {
         items.push(
             "The contract: when non-trivial implementation happens on your turn, independent \
-             adversarial verification must happen before you report completion — regardless of \
-             who did the implementing (you directly, a fork you spawned, or a subagent). You \
+             adversarial verification must happen before you report completion \u{2014} regardless \
+             of who did the implementing (you directly, a fork you spawned, or a subagent). You \
              are the one reporting to the user; you own the gate. Non-trivial means: 3+ file \
              edits, backend/API changes, or infrastructure changes. Spawn the Agent tool with \
              subagent_type=\"verification\". Your own checks, caveats, and a fork's self-checks \
-             do NOT substitute — only the verifier assigns a verdict; you cannot self-assign \
+             do NOT substitute \u{2014} only the verifier assigns a verdict; you cannot self-assign \
              PARTIAL. Pass the original user request, all files changed (by anyone), the \
              approach, and the plan file path if applicable."
                 .to_string(),
@@ -559,6 +628,39 @@ fn get_scratchpad_instructions() -> Option<String> {
          The scratchpad directory is session-specific, isolated from the user's project, and can \
          be used freely without permission prompts.",
         dir
+    ))
+}
+
+/// Output style section — appended when the user has selected a custom output style.
+/// Matches the TS `getOutputStyleSection()` in `constants/prompts.ts`.
+fn get_output_style_section(config: &OutputStyleConfig) -> String {
+    format!("# Output Style: {}\n{}", config.name, config.prompt)
+}
+
+/// Function result clearing section.
+///
+/// Matches the TS `getFunctionResultClearingSection()`. Informs the model that old
+/// tool results may be automatically cleared from context to free up space.
+/// The `keep_recent` count defaults to the standard value used by the cached
+/// micro-compact feature.
+fn get_function_result_clearing_section(model: &str) -> Option<String> {
+    // The TS version gates this on the CACHED_MICROCOMPACT feature flag and
+    // checks model support. We enable it for all supported model families
+    // (matching the TS supportedModels list).
+    let is_supported = model.contains("claude-opus-4")
+        || model.contains("claude-sonnet-4")
+        || model.contains("claude-haiku-4");
+
+    if !is_supported {
+        return None;
+    }
+
+    let keep_recent = 5;
+    Some(format!(
+        "# Function Result Clearing\n\n\
+         Old tool results will be automatically cleared from context to free up space. \
+         The {} most recent results are always kept.",
+        keep_recent
     ))
 }
 

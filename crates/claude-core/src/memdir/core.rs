@@ -159,7 +159,37 @@ pub fn build_memory_lines(
         for guideline in extra { lines.push(guideline.clone()); }
         lines.push(String::new());
     }
+
+    lines.extend(build_searching_past_context_section(memory_dir));
+
     lines
+}
+
+/// Build the "Searching past context" section.
+///
+/// Provides instructions for how to search memory files and session
+/// transcript logs when looking for past context.
+pub fn build_searching_past_context_section(memory_dir: &str) -> Vec<String> {
+    let project_dir = super::paths::get_memory_base_dir()
+        .join("projects")
+        .to_string_lossy()
+        .to_string();
+
+    vec![
+        "## Searching past context".into(),
+        String::new(),
+        "When looking for past context:".into(),
+        "1. Search topic files in your memory directory:".into(),
+        "```".into(),
+        format!("Grep with pattern=\"<search term>\" path=\"{memory_dir}\" glob=\"*.md\""),
+        "```".into(),
+        "2. Session transcript logs (last resort \u{2014} large files, slow):".into(),
+        "```".into(),
+        format!("Grep with pattern=\"<search term>\" path=\"{project_dir}/\" glob=\"*.jsonl\""),
+        "```".into(),
+        "Use narrow search terms (error messages, file paths, function names) rather than broad keywords.".into(),
+        String::new(),
+    ]
 }
 
 /// Build the typed-memory prompt with MEMORY.md content included.
@@ -193,6 +223,31 @@ pub async fn read_memory_file(path: &Path) -> Option<String> {
         Ok(content) => Some(content),
         Err(e) => { debug!("failed to read memory file {}: {e}", path.display()); None }
     }
+}
+
+/// Build the memory prompt section for injection into the system prompt.
+///
+/// Reads MEMORY.md content, combines behavioral instructions with stored
+/// memories, and returns the complete memory section. This is the primary
+/// entry point for building the memory part of the system prompt.
+pub fn build_memory_prompt_section(memory_dir: &str, extra_guidelines: Option<&[String]>) -> String {
+    let entrypoint = format!("{memory_dir}{ENTRYPOINT_NAME}");
+    let entrypoint_content = std::fs::read_to_string(&entrypoint).unwrap_or_default();
+
+    let mut lines = build_memory_lines(AUTO_MEM_DISPLAY_NAME, memory_dir, extra_guidelines, false);
+
+    if !entrypoint_content.trim().is_empty() {
+        let t = truncate_entrypoint_content(&entrypoint_content);
+        lines.push(format!("## {ENTRYPOINT_NAME}"));
+        lines.push(String::new());
+        lines.push(t.content);
+    } else {
+        lines.push(format!("## {ENTRYPOINT_NAME}"));
+        lines.push(String::new());
+        lines.push(format!("Your {ENTRYPOINT_NAME} is currently empty. When you save new memories, they will appear here."));
+    }
+
+    lines.join("\n")
 }
 
 /// Load the unified memory prompt for inclusion in the system prompt.
@@ -263,6 +318,7 @@ mod tests {
         assert!(prompt.contains("## How to save memories"));
         assert!(prompt.contains("## When to access memories"));
         assert!(prompt.contains("## Before recommending from memory"));
+        assert!(prompt.contains("## Searching past context"));
     }
 
     #[test]
@@ -277,6 +333,15 @@ mod tests {
     fn test_build_memory_prompt_empty_entrypoint() {
         let prompt = build_memory_prompt("test", "/nonexistent/path/", None);
         assert!(prompt.contains("currently empty"));
+    }
+
+    #[test]
+    fn test_build_searching_past_context_section() {
+        let section = build_searching_past_context_section("/tmp/memory/");
+        let text = section.join("\n");
+        assert!(text.contains("Searching past context"));
+        assert!(text.contains("Grep"));
+        assert!(text.contains("/tmp/memory/"));
     }
 
     #[tokio::test]
@@ -300,5 +365,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_memory_file_not_found() {
         assert!(read_memory_file(Path::new("/nonexistent/file.md")).await.is_none());
+    }
+
+    #[test]
+    fn test_build_memory_prompt_section() {
+        let section = build_memory_prompt_section("/nonexistent/path/", None);
+        assert!(section.contains("# auto memory"));
+        assert!(section.contains("currently empty"));
     }
 }

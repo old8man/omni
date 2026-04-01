@@ -173,12 +173,18 @@ pub fn build_request_body(
 
 const BETA_CLAUDE_CODE: &str = "claude-code-20250219";
 const BETA_INTERLEAVED_THINKING: &str = "interleaved-thinking-2025-05-14";
+const BETA_CONTEXT_1M: &str = "context-1m-2025-08-07";
 const BETA_CONTEXT_MANAGEMENT: &str = "context-management-2025-06-27";
 const BETA_PROMPT_CACHING_SCOPE: &str = "prompt-caching-scope-2026-01-05";
 const BETA_STRUCTURED_OUTPUTS: &str = "structured-outputs-2025-12-15";
+const BETA_WEB_SEARCH: &str = "web-search-2025-03-05";
+const BETA_TOOL_SEARCH_1P: &str = "advanced-tool-use-2025-11-20";
+const BETA_EFFORT: &str = "effort-2025-11-24";
 const BETA_REDACT_THINKING: &str = "redact-thinking-2026-02-12";
+const BETA_TOKEN_EFFICIENT_TOOLS: &str = "token-efficient-tools-2026-03-28";
 const BETA_FAST_MODE: &str = "fast-mode-2026-02-01";
 const BETA_TASK_BUDGETS: &str = "task-budgets-2026-03-13";
+const BETA_ADVISOR: &str = "advisor-tool-2026-03-01";
 const BETA_OAUTH: &str = "oauth-2025-04-20";
 
 // ── API client ────────────────────────────────────────────────────────────────
@@ -209,10 +215,16 @@ impl ApiClient {
         let mut betas: Vec<&str> = vec![
             BETA_CLAUDE_CODE,
             BETA_INTERLEAVED_THINKING,
+            BETA_CONTEXT_1M,
             BETA_CONTEXT_MANAGEMENT,
             BETA_PROMPT_CACHING_SCOPE,
             BETA_STRUCTURED_OUTPUTS,
+            BETA_WEB_SEARCH,
+            BETA_TOOL_SEARCH_1P,
+            BETA_EFFORT,
             BETA_REDACT_THINKING,
+            BETA_TOKEN_EFFICIENT_TOOLS,
+            BETA_ADVISOR,
         ];
 
         if self.config.speed == Some(Speed::Fast) {

@@ -406,6 +406,7 @@ fn load_hooks_into_registry(registry: &mut HookRegistry, settings: &Settings, so
                 config: hook_cmd,
                 matcher: None,
                 source: source.clone(),
+                plugin_name: None,
             });
         }
     }

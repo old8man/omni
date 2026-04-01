@@ -330,6 +330,7 @@ async fn main() -> Result<()> {
         memory_prompt,
         None, // mcp_instructions
         None, // language_preference
+        None, // output_style
     )
     .await?;
 

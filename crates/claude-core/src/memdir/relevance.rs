@@ -125,6 +125,8 @@ mod tests {
             mtime_ms: 1_700_000_000_000,
             description: Some("integration tests must hit a real database".into()),
             memory_type: None,
+            name: None,
+            size_bytes: 0,
         };
         assert!(score_memory(&header, &query_tokens) > 0.0);
     }
@@ -138,6 +140,8 @@ mod tests {
             mtime_ms: 1_700_000_000_000,
             description: Some("user is a data scientist focused on logging".into()),
             memory_type: None,
+            name: None,
+            size_bytes: 0,
         };
         assert!(score_memory(&header, &query_tokens) < MIN_SCORE_THRESHOLD);
     }

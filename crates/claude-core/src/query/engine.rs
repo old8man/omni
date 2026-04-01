@@ -344,6 +344,16 @@ impl QueryEngine {
             model: Some(self.api_client.config.model.clone()),
             total_cost: 0.0,
             cumulative_usage: crate::session::CumulativeUsage::default(),
+            custom_title: None,
+            ai_title: None,
+            tag: None,
+            last_prompt: None,
+            file_history: std::collections::HashMap::new(),
+            content_replacements: Vec::new(),
+            context_collapse_commits: Vec::new(),
+            context_collapse_snapshot: None,
+            message_uuids: std::collections::HashSet::new(),
+            git_branch: None,
         };
         manager.save_session(&session)
     }

@@ -54,7 +54,7 @@ async fn test_build_system_prompt_full_with_model() {
     let tmp = tempfile::tempdir().unwrap();
     let tool_names = vec!["Read".to_string(), "Bash".to_string(), "Agent".to_string()];
     let blocks =
-        build_system_prompt_full(tmp.path(), "claude-opus-4-6", &tool_names, None, None, None)
+        build_system_prompt_full(tmp.path(), "claude-opus-4-6", &tool_names, None, None, None, None)
             .await
             .unwrap();
 
@@ -83,6 +83,7 @@ async fn test_build_system_prompt_with_memory() {
         Some("# Memory\nRemember that the user prefers Rust."),
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -107,6 +108,7 @@ async fn test_build_system_prompt_with_language() {
         None,
         None,
         Some("Japanese"),
+        None,
     )
     .await
     .unwrap();
