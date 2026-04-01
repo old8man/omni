@@ -308,6 +308,14 @@ impl ApiClient {
         let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
 
+        tracing::info!(
+            "API request: POST {} model={} messages={} tools={}",
+            url,
+            body.get("model").and_then(|v| v.as_str()).unwrap_or("?"),
+            body.get("messages").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+            body.get("tools").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        );
+
         let request = self.http.post(&url);
         let request = self.apply_common_headers(request);
 
@@ -322,7 +330,7 @@ impl ApiClient {
                 .map(String::from);
             let text = response.text().await.unwrap_or_default();
             let truncated = &text[..text.len().min(500)];
-            tracing::error!("API error {}: {}", status, truncated);
+            tracing::error!("API error {} at {}: model={} body={}", status, url, self.config.model, truncated);
             if let Some(ra) = retry_after {
                 anyhow::bail!("API error {}: {} [retry-after: {}]", status, truncated, ra);
             }
