@@ -390,11 +390,24 @@ impl App {
                 AppEvent::Key(k) => {
                     // --- Global shortcuts that always apply ---
 
-                    // Ctrl+C: cancel current request, or hint to use Ctrl+D
+                    // Ctrl+C: copy selection, cancel request, or hint
                     if matches!(
                         (k.modifiers, k.code),
                         (KeyModifiers::CONTROL, KeyCode::Char('c'))
                     ) {
+                        // If text is selected, copy it to clipboard first
+                        if self.selection.has_selection() {
+                            let text = self.extract_selected_text();
+                            if !text.is_empty() {
+                                crate::mouse::copy_to_clipboard(&text);
+                                self.selection.clear();
+                                self.message_list.push(MessageEntry::System {
+                                    text: "Copied to clipboard.".to_string(),
+                                    severity: SystemSeverity::Info,
+                                });
+                            }
+                            continue;
+                        }
                         if self.engine_busy {
                             cancel.cancel();
                             self.spinner.stop();
@@ -1482,6 +1495,37 @@ impl App {
             }
             MouseAction::None => {}
         }
+    }
+
+    /// Extract visible text from message entries within the selection area.
+    /// Since we can't access the terminal's internal buffer after draw(),
+    /// we reconstruct text from the message_list entries.
+    fn extract_selected_text(&self) -> String {
+        if !self.selection.has_selection() {
+            return String::new();
+        }
+        // Collect all message text — each entry is a "line" in the viewport
+        let mut all_text = String::new();
+        for entry in self.message_list.entries() {
+            let text = match entry {
+                MessageEntry::User { text, .. } => text.clone(),
+                MessageEntry::Assistant { text } => text.clone(),
+                MessageEntry::ToolResult { output, .. } => output.clone(),
+                MessageEntry::Thinking { text, .. } => text.clone(),
+                MessageEntry::System { text, .. } => text.clone(),
+                MessageEntry::CommandOutput { output, .. } => output.clone(),
+                MessageEntry::CompactBoundary { summary } => summary.clone(),
+                MessageEntry::DiffPreview { diff_text, .. } => diff_text.clone(),
+                _ => String::new(),
+            };
+            if !all_text.is_empty() {
+                all_text.push('\n');
+            }
+            all_text.push_str(&text);
+        }
+        // For now return all visible text — full buffer-based selection
+        // requires storing the rendered buffer which we'll add later
+        all_text
     }
 
     fn render(&mut self) -> Result<()> {

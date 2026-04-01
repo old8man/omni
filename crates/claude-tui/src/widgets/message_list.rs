@@ -182,6 +182,11 @@ impl MessageList {
         self.messages.len()
     }
 
+    /// Access all message entries.
+    pub fn entries(&self) -> &[MessageEntry] {
+        &self.messages
+    }
+
     /// Whether the list is empty.
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
