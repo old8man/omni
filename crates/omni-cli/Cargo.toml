@@ -1,0 +1,32 @@
+[package]
+name = "omni-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "omni"
+path = "src/main.rs"
+
+[dependencies]
+omni-core = { path = "../omni-core" }
+omni-tools = { path = "../omni-tools" }
+omni-tui = { path = "../omni-tui" }
+tokio.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+serde_json.workspace = true
+uuid.workspace = true
+hostname = "0.4"
+chrono.workspace = true
+
+[features]
+default = ["omni-core/default", "omni-tools/default", "omni-tui/default"]
+bridge = ["omni-core/bridge", "omni-tools/bridge", "omni-tui/bridge"]
+voice = ["omni-core/voice", "omni-tools/voice", "omni-tui/voice"]
+coordinator = ["omni-core/coordinator", "omni-tools/coordinator", "omni-tui/coordinator"]
+buddy = ["omni-core/buddy", "omni-tools/buddy", "omni-tui/buddy"]
+kairos = ["omni-core/kairos", "omni-tools/kairos", "omni-tui/kairos"]
+computer-use = ["omni-core/computer-use", "omni-tools/computer-use", "omni-tui/computer-use"]

@@ -1,0 +1,36 @@
+[package]
+name = "omni-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+omni-core = { path = "../omni-core" }
+omni-tools = { path = "../omni-tools" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+base64 = "0.22"
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "html", "regex-onig"] }
+unicode-width = "0.2"
+unicode-segmentation = "1"
+htmlescape = "0.3"
+copypasta = { version = "0.10", default-features = false, features = ["wayland", "x11"] }
+tempfile = "3"
+
+[features]
+default = ["omni-core/default"]
+bridge = ["omni-core/bridge"]
+voice = ["omni-core/voice"]
+coordinator = ["omni-core/coordinator"]
+buddy = ["omni-core/buddy"]
+kairos = ["omni-core/kairos"]
+computer-use = ["omni-core/computer-use"]
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/claude-core",
-    "crates/claude-tools",
-    "crates/claude-tui",
-    "crates/claude-cli",
+    "crates/omni-core",
+    "crates/omni-tools",
+    "crates/omni-tui",
+    "crates/omni-cli",
 ]
 resolver = "2"
 

@@ -1,0 +1,35 @@
+[package]
+name = "omni-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+omni-core = { path = "../omni-core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+glob = "0.3"
+dirs = "6"
+regex = "1"
+libc = "0.2"
+base64 = "0.22"
+
+[features]
+default = ["omni-core/default"]
+bridge = ["omni-core/bridge"]
+voice = ["omni-core/voice"]
+coordinator = ["omni-core/coordinator"]
+buddy = ["omni-core/buddy"]
+kairos = ["omni-core/kairos"]
+computer-use = ["omni-core/computer-use"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util", "macros"] }
+serde_json.workspace = true
