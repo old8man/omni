@@ -1139,9 +1139,10 @@ async fn auto_compact(
         }]
     })];
 
-    // Retry loop for prompt-too-long errors during summarization.
+    // Retry loop for prompt-too-long errors and transient streaming failures.
     let mut messages_to_summarize = summary_messages;
     let mut ptl_attempts = 0;
+    let mut streaming_attempts = 0;
     let response;
 
     loop {
@@ -1171,6 +1172,23 @@ async fn auto_compact(
                 break;
             }
             Err(e) => {
+                // Retry transient streaming/network errors (timeout, connection
+                // reset, 5xx) up to MAX_COMPACT_STREAMING_RETRIES times.
+                if streaming_attempts < MAX_COMPACT_STREAMING_RETRIES
+                    && is_transient_error(&e)
+                {
+                    streaming_attempts += 1;
+                    let backoff =
+                        std::time::Duration::from_millis(500 * (1 << streaming_attempts));
+                    tracing::warn!(
+                        attempt = streaming_attempts,
+                        max = MAX_COMPACT_STREAMING_RETRIES,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "compact API call failed with transient error, retrying: {e:#}"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
                 return Err(e);
             }
         }
@@ -1599,7 +1617,28 @@ async fn reactive_compact(
         }]
     })];
 
-    let response = api_client.send_request(&summary_messages, &[], &[]).await?;
+    // Retry transient streaming failures during the summarization API call.
+    let mut streaming_attempts = 0;
+    let response = loop {
+        match api_client.send_request(&summary_messages, &[], &[]).await {
+            Ok(resp) => break resp,
+            Err(e) => {
+                if streaming_attempts < MAX_COMPACT_STREAMING_RETRIES && is_transient_error(&e) {
+                    streaming_attempts += 1;
+                    let backoff =
+                        std::time::Duration::from_millis(500 * (1 << streaming_attempts));
+                    tracing::warn!(
+                        attempt = streaming_attempts,
+                        max = MAX_COMPACT_STREAMING_RETRIES,
+                        "reactive-compact API call failed, retrying: {e:#}"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    };
     let response_text = extract_text_from_response(&response);
 
     if response_text.is_empty() {
@@ -1713,6 +1752,27 @@ pub fn run_post_compact_cleanup() {
 // ── Prompt-too-long retry helpers ───────────────────────────────────────────
 
 /// Check if a response indicates a prompt-too-long error.
+/// Check whether an error is transient (network timeout, connection reset, 5xx)
+/// and therefore worth retrying.
+fn is_transient_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_lowercase();
+    // Network / transport errors
+    msg.contains("timeout")
+        || msg.contains("timed out")
+        || msg.contains("connection reset")
+        || msg.contains("connection refused")
+        || msg.contains("broken pipe")
+        || msg.contains("eof")
+        || msg.contains("connection closed")
+        // HTTP 5xx server errors
+        || msg.contains("500 internal server error")
+        || msg.contains("502 bad gateway")
+        || msg.contains("503 service unavailable")
+        || msg.contains("504 gateway timeout")
+        || msg.contains("529")
+        || msg.contains("status: 5")
+}
+
 fn is_prompt_too_long_response(text: &str) -> bool {
     text.starts_with("Conversation too long")
         || text.contains("prompt is too long")
