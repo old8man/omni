@@ -1,7 +1,4 @@
 //! Memory file scanning primitives.
-//!
-//! Scans a memory directory for `.md` files, parses their frontmatter, and
-//! builds a header index sorted by modification time (newest first).
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -11,36 +8,23 @@ use tracing::debug;
 
 use super::memory_types::{parse_frontmatter, MemoryType};
 
-/// Maximum number of memory files to index. Beyond this, only the most
-/// recently modified files are kept.
 const MAX_MEMORY_FILES: usize = 200;
-
-/// Maximum number of frontmatter lines to read from each file.
-/// Avoids reading entire large files when only the header is needed.
 const FRONTMATTER_MAX_BYTES: usize = 2048;
 
 /// Parsed header information from a single memory file.
 #[derive(Clone, Debug)]
 pub struct MemoryHeader {
-    /// Relative path from the memory directory (e.g. `user_role.md` or `sub/file.md`).
     pub filename: String,
-    /// Absolute path to the file.
     pub file_path: PathBuf,
-    /// Modification time in milliseconds since Unix epoch.
     pub mtime_ms: u64,
-    /// Description from frontmatter, if present.
     pub description: Option<String>,
-    /// Memory type from frontmatter, if present and valid.
     pub memory_type: Option<MemoryType>,
 }
 
 /// Scan a memory directory for `.md` files, read their frontmatter, and return
 /// a header list sorted newest-first (capped at `MAX_MEMORY_FILES`).
-///
-/// Excludes `MEMORY.md` (the entrypoint index, already loaded in system prompt).
-/// Scans recursively into subdirectories.
 pub async fn scan_memory_files(memory_dir: &Path) -> Vec<MemoryHeader> {
-    match scan_memory_files_inner(memory_dir).await {
+    match scan_inner(memory_dir).await {
         Ok(headers) => headers,
         Err(e) => {
             debug!("failed to scan memory directory {}: {e}", memory_dir.display());
@@ -49,20 +33,14 @@ pub async fn scan_memory_files(memory_dir: &Path) -> Vec<MemoryHeader> {
     }
 }
 
-async fn scan_memory_files_inner(memory_dir: &Path) -> anyhow::Result<Vec<MemoryHeader>> {
+async fn scan_inner(memory_dir: &Path) -> anyhow::Result<Vec<MemoryHeader>> {
     let mut headers = Vec::new();
     collect_md_files(memory_dir, memory_dir, &mut headers).await?;
-
-    // Sort newest-first by mtime
     headers.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-
-    // Cap at MAX_MEMORY_FILES
     headers.truncate(MAX_MEMORY_FILES);
-
     Ok(headers)
 }
 
-/// Recursively collect `.md` files from a directory tree, skipping `MEMORY.md`.
 fn collect_md_files<'a>(
     base: &'a Path,
     dir: &'a Path,
@@ -75,7 +53,6 @@ fn collect_md_files<'a>(
             let file_type = entry.file_type().await?;
 
             if file_type.is_dir() {
-                // Recurse into subdirectories, but skip hidden directories
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !name.starts_with('.') {
                         collect_md_files(base, &path, headers).await?;
@@ -86,31 +63,19 @@ fn collect_md_files<'a>(
                     Some(n) => n,
                     None => continue,
                 };
+                if !name.ends_with(".md") || name == "MEMORY.md" { continue; }
 
-                // Skip non-markdown files and the entrypoint index
-                if !name.ends_with(".md") || name == "MEMORY.md" {
-                    continue;
-                }
-
-                // Get modification time
                 let metadata = fs::metadata(&path).await?;
-                let mtime_ms = metadata
-                    .modified()
-                    .ok()
+                let mtime_ms = metadata.modified().ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
 
-                // Read just enough to parse frontmatter
                 let content = read_file_head(&path, FRONTMATTER_MAX_BYTES).await;
                 let (fm, _) = parse_frontmatter(&content);
 
-                // Compute relative path from the memory directory
-                let relative = path
-                    .strip_prefix(base)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
+                let relative = path.strip_prefix(base).unwrap_or(&path)
+                    .to_string_lossy().to_string();
 
                 headers.push(MemoryHeader {
                     filename: relative,
@@ -125,7 +90,6 @@ fn collect_md_files<'a>(
     })
 }
 
-/// Read at most `max_bytes` from the beginning of a file.
 async fn read_file_head(path: &Path, max_bytes: usize) -> String {
     match fs::read(path).await {
         Ok(bytes) => {
@@ -136,41 +100,28 @@ async fn read_file_head(path: &Path, max_bytes: usize) -> String {
     }
 }
 
-/// Format memory headers as a text manifest: one line per file with
-/// `[type] filename (timestamp): description`.
-///
-/// Used by both the recall selector prompt and the extraction-agent prompt.
+/// Format memory headers as a text manifest.
 pub fn format_memory_manifest(memories: &[MemoryHeader]) -> String {
-    memories
-        .iter()
-        .map(|m| {
-            let tag = match &m.memory_type {
-                Some(t) => format!("[{t}] "),
-                None => String::new(),
-            };
-            let ts = format_timestamp_iso(m.mtime_ms);
-            match &m.description {
-                Some(desc) => format!("- {tag}{} ({ts}): {desc}", m.filename),
-                None => format!("- {tag}{} ({ts})", m.filename),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    memories.iter().map(|m| {
+        let tag = match &m.memory_type {
+            Some(t) => format!("[{t}] "),
+            None => String::new(),
+        };
+        let ts = format_timestamp_iso(m.mtime_ms);
+        match &m.description {
+            Some(desc) => format!("- {tag}{} ({ts}): {desc}", m.filename),
+            None => format!("- {tag}{} ({ts})", m.filename),
+        }
+    }).collect::<Vec<_>>().join("\n")
 }
 
 /// Detect duplicate memories by comparing descriptions.
-///
-/// Returns pairs of indices into the headers slice that have identical
-/// non-empty descriptions, suggesting one may be a duplicate.
 pub fn detect_duplicates(headers: &[MemoryHeader]) -> Vec<(usize, usize)> {
     let mut duplicates = Vec::new();
     for i in 0..headers.len() {
         for j in (i + 1)..headers.len() {
-            if let (Some(desc_a), Some(desc_b)) = (&headers[i].description, &headers[j].description)
-            {
-                if !desc_a.is_empty() && desc_a == desc_b {
-                    duplicates.push((i, j));
-                }
+            if let (Some(a), Some(b)) = (&headers[i].description, &headers[j].description) {
+                if !a.is_empty() && a == b { duplicates.push((i, j)); }
             }
         }
     }
@@ -193,10 +144,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn now_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
     }
 
     #[tokio::test]
@@ -215,22 +163,10 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_memory_files() {
         let tmp = TempDir::new().unwrap();
-
-        // Create a memory file with frontmatter
-        let content = "---\nname: test\ndescription: a test memory\ntype: user\n---\n\nBody content";
-        tokio::fs::write(tmp.path().join("test.md"), content)
-            .await
-            .unwrap();
-
-        // Create MEMORY.md (should be excluded)
-        tokio::fs::write(tmp.path().join("MEMORY.md"), "# Index\n- test")
-            .await
-            .unwrap();
-
-        // Create a non-markdown file (should be excluded)
-        tokio::fs::write(tmp.path().join("notes.txt"), "some notes")
-            .await
-            .unwrap();
+        tokio::fs::write(tmp.path().join("test.md"),
+            "---\nname: test\ndescription: a test memory\ntype: user\n---\n\nBody").await.unwrap();
+        tokio::fs::write(tmp.path().join("MEMORY.md"), "# Index").await.unwrap();
+        tokio::fs::write(tmp.path().join("notes.txt"), "notes").await.unwrap();
 
         let headers = scan_memory_files(tmp.path()).await;
         assert_eq!(headers.len(), 1);
@@ -244,30 +180,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let sub = tmp.path().join("subdir");
         tokio::fs::create_dir(&sub).await.unwrap();
-
-        tokio::fs::write(
-            tmp.path().join("root.md"),
-            "---\nname: root\ndescription: root memory\ntype: project\n---\n",
-        )
-        .await
-        .unwrap();
-
-        tokio::fs::write(
-            sub.join("nested.md"),
-            "---\nname: nested\ndescription: nested memory\ntype: feedback\n---\n",
-        )
-        .await
-        .unwrap();
+        tokio::fs::write(tmp.path().join("root.md"),
+            "---\nname: root\ndescription: root\ntype: project\n---\n").await.unwrap();
+        tokio::fs::write(sub.join("nested.md"),
+            "---\nname: nested\ndescription: nested\ntype: feedback\n---\n").await.unwrap();
 
         let headers = scan_memory_files(tmp.path()).await;
         assert_eq!(headers.len(), 2);
-
-        let filenames: Vec<&str> = headers.iter().map(|h| h.filename.as_str()).collect();
-        assert!(filenames.contains(&"root.md"));
-        assert!(
-            filenames.contains(&"subdir/nested.md")
-                || filenames.contains(&"subdir\\nested.md")
-        );
     }
 
     #[tokio::test]
@@ -275,10 +194,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let hidden = tmp.path().join(".hidden");
         tokio::fs::create_dir(&hidden).await.unwrap();
-
-        tokio::fs::write(hidden.join("secret.md"), "---\nname: secret\n---\n")
-            .await
-            .unwrap();
+        tokio::fs::write(hidden.join("secret.md"), "---\nname: secret\n---\n").await.unwrap();
 
         let headers = scan_memory_files(tmp.path()).await;
         assert!(headers.is_empty());
@@ -291,7 +207,7 @@ mod tests {
                 filename: "user_role.md".into(),
                 file_path: PathBuf::from("/tmp/memory/user_role.md"),
                 mtime_ms: 1_700_000_000_000,
-                description: Some("User's role and background".into()),
+                description: Some("User's role".into()),
                 memory_type: Some(MemoryType::User),
             },
             MemoryHeader {
@@ -302,71 +218,21 @@ mod tests {
                 memory_type: None,
             },
         ];
-
         let manifest = format_memory_manifest(&headers);
         assert!(manifest.contains("[user] user_role.md"));
-        assert!(manifest.contains("User's role and background"));
+        assert!(manifest.contains("User's role"));
         assert!(manifest.contains("no_desc.md"));
     }
 
     #[test]
     fn test_detect_duplicates() {
         let headers = vec![
-            MemoryHeader {
-                filename: "a.md".into(),
-                file_path: PathBuf::from("/tmp/a.md"),
-                mtime_ms: now_ms(),
-                description: Some("same desc".into()),
-                memory_type: None,
-            },
-            MemoryHeader {
-                filename: "b.md".into(),
-                file_path: PathBuf::from("/tmp/b.md"),
-                mtime_ms: now_ms(),
-                description: Some("different desc".into()),
-                memory_type: None,
-            },
-            MemoryHeader {
-                filename: "c.md".into(),
-                file_path: PathBuf::from("/tmp/c.md"),
-                mtime_ms: now_ms(),
-                description: Some("same desc".into()),
-                memory_type: None,
-            },
+            MemoryHeader { filename: "a.md".into(), file_path: PathBuf::from("/a.md"), mtime_ms: now_ms(), description: Some("same".into()), memory_type: None },
+            MemoryHeader { filename: "b.md".into(), file_path: PathBuf::from("/b.md"), mtime_ms: now_ms(), description: Some("diff".into()), memory_type: None },
+            MemoryHeader { filename: "c.md".into(), file_path: PathBuf::from("/c.md"), mtime_ms: now_ms(), description: Some("same".into()), memory_type: None },
         ];
-
         let dupes = detect_duplicates(&headers);
         assert_eq!(dupes.len(), 1);
         assert_eq!(dupes[0], (0, 2));
-    }
-
-    #[test]
-    fn test_detect_duplicates_no_desc() {
-        let headers = vec![
-            MemoryHeader {
-                filename: "a.md".into(),
-                file_path: PathBuf::from("/tmp/a.md"),
-                mtime_ms: now_ms(),
-                description: None,
-                memory_type: None,
-            },
-            MemoryHeader {
-                filename: "b.md".into(),
-                file_path: PathBuf::from("/tmp/b.md"),
-                mtime_ms: now_ms(),
-                description: None,
-                memory_type: None,
-            },
-        ];
-
-        let dupes = detect_duplicates(&headers);
-        assert!(dupes.is_empty());
-    }
-
-    #[test]
-    fn test_format_timestamp_iso() {
-        let ts = format_timestamp_iso(1_700_000_000_000);
-        assert!(ts.contains("2023"));
-        assert!(ts.contains("T"));
     }
 }

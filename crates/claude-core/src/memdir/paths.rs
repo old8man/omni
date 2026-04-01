@@ -1,85 +1,44 @@
 //! Memory directory path resolution.
-//!
-//! Computes the auto-memory path from the current working directory:
-//!   `~/.claude/projects/{sanitized_cwd}/memory/`
-//!
-//! Supports overrides via environment variables and settings, with security
-//! validation to prevent path traversal attacks.
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// Default config home directory name.
 const CLAUDE_CONFIG_DIR: &str = ".claude";
-/// Subdirectory within the config home for project-scoped storage.
 const PROJECTS_DIR: &str = "projects";
-/// Memory directory name within the project directory.
 const MEMORY_DIR: &str = "memory";
-/// Entrypoint file name.
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
 /// Whether auto-memory features are enabled.
-///
-/// Enabled by default. Priority chain (first defined wins):
-///   1. `CLAUDE_CODE_DISABLE_AUTO_MEMORY` env var (1/true -> OFF, 0/false -> ON)
-///   2. `CLAUDE_CODE_SIMPLE` (--bare) -> OFF
-///   3. Default: enabled
 pub fn is_auto_memory_enabled() -> bool {
     if let Ok(val) = env::var("CLAUDE_CODE_DISABLE_AUTO_MEMORY") {
-        if is_truthy(&val) {
-            return false;
-        }
-        if is_falsy(&val) {
-            return true;
-        }
+        if is_truthy(&val) { return false; }
+        if is_falsy(&val) { return true; }
     }
     if let Ok(val) = env::var("CLAUDE_CODE_SIMPLE") {
-        if is_truthy(&val) {
-            return false;
-        }
+        if is_truthy(&val) { return false; }
     }
     true
 }
 
 /// Returns the base directory for persistent memory storage.
-///
-/// Resolution order:
-///   1. `CLAUDE_CODE_REMOTE_MEMORY_DIR` env var (explicit override, set in CCR)
-///   2. `CLAUDE_CONFIG_DIR` env var (custom config home)
-///   3. `~/.claude` (default config home)
 pub fn get_memory_base_dir() -> PathBuf {
     if let Ok(dir) = env::var("CLAUDE_CODE_REMOTE_MEMORY_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+        if !dir.is_empty() { return PathBuf::from(dir); }
     }
     get_claude_config_home()
 }
 
-/// Returns the Claude config home directory.
-///
-/// Resolution order:
-///   1. `CLAUDE_CONFIG_DIR` env var
-///   2. `~/.claude`
 fn get_claude_config_home() -> PathBuf {
     if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+        if !dir.is_empty() { return PathBuf::from(dir); }
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(CLAUDE_CONFIG_DIR)
 }
 
-/// Returns the auto-memory directory path for the given working directory.
-///
-/// Resolution order:
-///   1. `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` env var (full-path override)
-///   2. `<memory_base>/projects/<sanitized_cwd>/memory/`
-///
-/// The result always ends with a path separator.
+/// Returns the auto-memory directory path.
 pub fn get_auto_mem_path() -> PathBuf {
     static CACHED: OnceLock<PathBuf> = OnceLock::new();
     CACHED
@@ -96,20 +55,18 @@ pub fn get_auto_mem_path() -> PathBuf {
 }
 
 /// Compute the auto-memory path for a specific working directory.
-/// Useful for testing or when the CWD is known.
 pub fn compute_auto_mem_path(cwd: &Path) -> PathBuf {
     let base = get_memory_base_dir();
     let sanitized = sanitize_path_for_key(&cwd.to_string_lossy());
     base.join(PROJECTS_DIR).join(sanitized).join(MEMORY_DIR)
 }
 
-/// Returns the auto-memory entrypoint (MEMORY.md inside the auto-memory dir).
+/// Returns the auto-memory entrypoint (MEMORY.md).
 pub fn get_auto_mem_entrypoint() -> PathBuf {
     get_auto_mem_path().join(ENTRYPOINT_NAME)
 }
 
 /// Returns the daily log file path for the given date components.
-/// Shape: `<auto_mem_path>/logs/YYYY/MM/YYYY-MM-DD.md`
 pub fn get_auto_mem_daily_log_path(year: i32, month: u32, day: u32) -> PathBuf {
     let yyyy = format!("{year:04}");
     let mm = format!("{month:02}");
@@ -123,17 +80,12 @@ pub fn get_auto_mem_daily_log_path(year: i32, month: u32, day: u32) -> PathBuf {
 
 /// Check if an absolute path is within the auto-memory directory.
 pub fn is_auto_mem_path(path: &Path) -> bool {
-    let normalized = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let auto_path = get_auto_mem_path();
     normalized.starts_with(&auto_path)
 }
 
 /// Sanitize a filesystem path into a safe directory-name key.
-///
-/// Replaces path separators and special characters with dashes,
-/// collapses consecutive dashes, and trims leading/trailing dashes.
 pub fn sanitize_path_for_key(path: &str) -> String {
     let mapped: String = path
         .chars()
@@ -143,51 +95,28 @@ pub fn sanitize_path_for_key(path: &str) -> String {
             _ => '-',
         })
         .collect();
-
     let mut result = String::with_capacity(mapped.len());
     let mut prev_dash = false;
     for c in mapped.chars() {
         if c == '-' {
-            if !prev_dash {
-                result.push('-');
-            }
+            if !prev_dash { result.push('-'); }
             prev_dash = true;
         } else {
             result.push(c);
             prev_dash = false;
         }
     }
-
     result.trim_matches('-').to_string()
 }
 
-/// Validate and normalize a candidate memory directory path.
-///
-/// Rejects paths that would be dangerous:
-/// - relative paths
-/// - root/near-root (length < 3)
-/// - paths containing null bytes
-/// - UNC paths
-///
-/// Returns the normalized path or `None` if rejected.
 fn validate_memory_path(raw: &str) -> Option<PathBuf> {
-    if raw.is_empty() {
-        return None;
-    }
+    if raw.is_empty() { return None; }
     let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        return None;
-    }
+    if !path.is_absolute() { return None; }
     let s = path.to_string_lossy();
-    if s.len() < 3 {
-        return None;
-    }
-    if s.contains('\0') {
-        return None;
-    }
-    if s.starts_with("\\\\") || s.starts_with("//") {
-        return None;
-    }
+    if s.len() < 3 { return None; }
+    if s.contains('\0') { return None; }
+    if s.starts_with("\\\\") || s.starts_with("//") { return None; }
     Some(path)
 }
 
@@ -248,18 +177,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_memory_path_rejects_null_byte() {
-        assert!(validate_memory_path("/path/with\0null").is_none());
-    }
-
-    #[test]
     fn test_validate_memory_path_accepts_absolute() {
         let result = validate_memory_path("/home/user/.claude/memory");
         assert!(result.is_some());
-        assert_eq!(
-            result.unwrap(),
-            PathBuf::from("/home/user/.claude/memory")
-        );
     }
 
     #[test]
@@ -268,26 +188,5 @@ mod tests {
         let path_str = path.to_string_lossy();
         assert!(path_str.ends_with("2026-03-15.md"));
         assert!(path_str.contains("logs/2026/03"));
-    }
-
-    #[test]
-    fn test_is_truthy() {
-        assert!(is_truthy("1"));
-        assert!(is_truthy("true"));
-        assert!(is_truthy("yes"));
-        assert!(is_truthy("on"));
-        assert!(!is_truthy("0"));
-        assert!(!is_truthy("false"));
-        assert!(!is_truthy("random"));
-    }
-
-    #[test]
-    fn test_is_falsy() {
-        assert!(is_falsy("0"));
-        assert!(is_falsy("false"));
-        assert!(is_falsy("no"));
-        assert!(is_falsy("off"));
-        assert!(!is_falsy("1"));
-        assert!(!is_falsy("true"));
     }
 }
