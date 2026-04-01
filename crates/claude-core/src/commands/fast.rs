@@ -16,8 +16,6 @@ impl Command for FastCommand {
     }
 
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
-        CommandResult::Output(
-            "Fast mode toggled. Uses the same model with faster output.".to_string(),
-        )
+        CommandResult::ToggleFastMode
     }
 }

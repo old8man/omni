@@ -22,9 +22,8 @@ impl Command for ThemeCommand {
     async fn execute(&self, args: &str, _ctx: &CommandContext) -> CommandResult {
         let theme = args.trim().to_lowercase();
         if theme.is_empty() {
-            CommandResult::Output(
-                "Usage: /theme <dark|light|auto>\nCurrently using auto-detected theme.".to_string(),
-            )
+            // Open the interactive theme picker
+            CommandResult::OpenPicker("theme".to_string())
         } else {
             match theme.as_str() {
                 "dark" | "light" | "auto" => {

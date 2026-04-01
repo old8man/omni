@@ -22,7 +22,8 @@ impl Command for ResumeCommand {
     async fn execute(&self, args: &str, _ctx: &CommandContext) -> CommandResult {
         let id = args.trim();
         if id.is_empty() {
-            CommandResult::Output("Usage: /resume <session-id>".to_string())
+            // Open the interactive session picker
+            CommandResult::OpenPicker("session".to_string())
         } else {
             CommandResult::ResumeSession(id.to_string())
         }

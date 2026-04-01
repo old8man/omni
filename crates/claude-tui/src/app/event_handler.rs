@@ -13,6 +13,32 @@ use super::App;
 
 impl App {
     pub(crate) fn handle_key_standalone(&mut self, key: KeyEvent) {
+        // Picker overlay intercepts all keys when open.
+        if self.active_picker.is_some() {
+            use crate::widgets::picker::PickerAction;
+            let action = self.active_picker.as_mut().unwrap().handle_key(key);
+            match action {
+                PickerAction::Selected(_) | PickerAction::Cancelled => {
+                    self.active_picker = None;
+                }
+                PickerAction::None => {}
+            }
+            return;
+        }
+
+        // Config panel overlay intercepts all keys when open.
+        if self.config_panel.is_some() {
+            use crate::widgets::config_panel::ConfigPanelAction;
+            let action = self.config_panel.as_mut().unwrap().handle_key(key.code, key.modifiers);
+            match action {
+                ConfigPanelAction::Consumed => {}
+                ConfigPanelAction::Close { .. } | ConfigPanelAction::Cancel => {
+                    self.config_panel = None;
+                }
+            }
+            return;
+        }
+
         // Cmd key shortcuts (macOS)
         if key.modifiers.contains(KeyModifiers::SUPER) {
             match key.code {

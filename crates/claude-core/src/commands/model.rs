@@ -21,21 +21,11 @@ impl Command for ModelCommand {
         "[model-name]"
     }
 
-    async fn execute(&self, args: &str, ctx: &CommandContext) -> CommandResult {
+    async fn execute(&self, args: &str, _ctx: &CommandContext) -> CommandResult {
         let name = args.trim();
         if name.is_empty() {
-            // Display current model with a friendly name
-            let display = model::get_public_model_display_name(&ctx.model)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| ctx.model.clone());
-            let mut output = format!("Current model: {display}");
-
-            // Show deprecation warning if applicable
-            if let Some(warning) = model::get_model_deprecation_warning(&ctx.model) {
-                output.push_str(&format!("\n\nWarning: {warning}"));
-            }
-
-            CommandResult::Output(output)
+            // Open the interactive model picker
+            CommandResult::OpenPicker("model".to_string())
         } else {
             // Validate input: accept aliases and known models
             let resolved = model::resolve_model_string(name);

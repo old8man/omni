@@ -1,9 +1,11 @@
 pub mod agent_status;
+pub mod config_panel;
 pub mod context_panel;
 pub mod diff_view;
 pub mod message_list;
 pub mod notification;
 pub mod permission_dialog;
+pub mod picker;
 pub mod prompt_input;
 pub mod search_overlay;
 pub mod spinner;

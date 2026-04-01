@@ -64,6 +64,8 @@ impl App {
         let notifications = &self.notifications;
         let input_handler = &self.input_handler;
         let selection = &self.selection;
+        let config_panel = &self.config_panel;
+        let active_picker = &self.active_picker;
         let show_welcome = message_list.is_empty() && !spinner.active;
         // Read live state from AppStateStore (non-blocking try_read to avoid
         // stalling the 60fps render loop if the engine holds a write lock).
@@ -419,6 +421,18 @@ impl App {
                 );
                 let notif_widget = NotificationWidget::new(notifications);
                 frame.render_widget(notif_widget, notif_area);
+            }
+
+            // Config panel overlay (full-screen, drawn last so it covers everything)
+            if let Some(ref panel) = config_panel {
+                let panel_height = area.height.saturating_sub(2).max(10);
+                let panel_area = crate::layout::centered_rect(85, panel_height, area);
+                frame.render_widget(panel, panel_area);
+            }
+
+            // Picker overlay (drawn on top of everything)
+            if let Some(ref picker) = active_picker {
+                picker.render(area, frame.buffer_mut());
             }
         })?;
         Ok(())

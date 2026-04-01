@@ -134,6 +134,10 @@ pub struct App {
     pub(crate) cost_warning_threshold: f64,
     /// Whether the context window warning has been shown this session.
     pub(crate) context_warning_shown: bool,
+    /// Interactive config panel overlay (opened via /config).
+    pub(crate) config_panel: Option<crate::widgets::config_panel::ConfigPanel>,
+    /// Active picker overlay (model, theme, or session selector).
+    pub(crate) active_picker: Option<crate::widgets::picker::ActivePicker>,
 }
 
 impl App {
@@ -198,6 +202,8 @@ impl App {
             cost_warning_shown: false,
             cost_warning_threshold: 5.0,
             context_warning_shown: false,
+            config_panel: None,
+            active_picker: None,
         })
     }
 
@@ -412,6 +418,163 @@ impl App {
                     self.should_quit = true;
                 }
                 AppEvent::Key(k) => {
+                    // --- Config panel overlay intercepts all keys ---
+                    if self.config_panel.is_some() {
+                        use crate::widgets::config_panel::ConfigPanelAction;
+                        let action = self.config_panel.as_mut().unwrap().handle_key(k.code, k.modifiers);
+                        match action {
+                            ConfigPanelAction::Consumed => {}
+                            ConfigPanelAction::Close { changes } => {
+                                // Apply changes from config panel.
+                                for (key, val) in &changes {
+                                    match key.as_str() {
+                                        "editor_mode" => {
+                                            let new_vim = val == "vim";
+                                            self.vim_mode = new_vim;
+                                            self.input_handler.set_vim_enabled(new_vim);
+                                            if let Some(ref state) = self.app_state {
+                                                state.write().vim_mode = new_vim;
+                                            }
+                                        }
+                                        "model" => {
+                                            self.model_name = val.clone();
+                                            if let Some(ref state) = self.app_state {
+                                                state.write().set_model_override(Some(val.clone()));
+                                            }
+                                        }
+                                        "default_permission_mode" => {
+                                            let is_plan = val == "plan";
+                                            self.plan_mode = is_plan;
+                                            if let Some(ref state) = self.app_state {
+                                                state.write().set_plan_mode(is_plan);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if !changes.is_empty() {
+                                    let summary: Vec<String> = changes
+                                        .iter()
+                                        .map(|(k, v)| format!("{} = {}", k, v))
+                                        .collect();
+                                    self.flash_success(format!("Config updated: {}", summary.join(", ")));
+                                }
+                                self.config_panel = None;
+                            }
+                            ConfigPanelAction::Cancel => {
+                                self.config_panel = None;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // --- Picker overlay intercepts all keys ---
+                    if self.active_picker.is_some() {
+                        use crate::widgets::picker::PickerAction;
+                        let action = self.active_picker.as_mut().unwrap().handle_key(k);
+                        match action {
+                            PickerAction::Selected(value) => {
+                                // Determine picker type and apply the selection
+                                let picker_kind = match self.active_picker.as_ref().unwrap() {
+                                    crate::widgets::picker::ActivePicker::Model(_) => "model",
+                                    crate::widgets::picker::ActivePicker::Theme(_) => "theme",
+                                    crate::widgets::picker::ActivePicker::Session(_) => "session",
+                                };
+                                match picker_kind {
+                                    "model" => {
+                                        self.model_name = value.clone();
+                                        if let Some(ref state) = self.app_state {
+                                            state.write().set_model_override(Some(value.clone()));
+                                        }
+                                        let display = claude_core::utils::model::get_public_model_display_name(&value)
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_else(|| value.clone());
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!("Switched to model: {}", display),
+                                            severity: SystemSeverity::Info,
+                                        });
+                                    }
+                                    "theme" => {
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!("Theme set to: {}", value),
+                                            severity: SystemSeverity::Info,
+                                        });
+                                    }
+                                    "session" => {
+                                        // Trigger session resume via the same path as /resume <id>
+                                        let cwd = std::env::current_dir().unwrap_or_default();
+                                        let cwd_str = cwd.to_string_lossy().to_string();
+                                        let project_dir =
+                                            claude_core::session::SessionManager::project_dir_for_cwd(&cwd_str);
+                                        let mgr = claude_core::session::SessionManager::new(project_dir);
+                                        match mgr.load_session(&value) {
+                                            Ok(session) => {
+                                                engine.lock().await.clear_messages();
+                                                for msg in &session.messages {
+                                                    engine.lock().await.add_raw_message(msg.clone());
+                                                }
+                                                self.message_list.clear();
+                                                self.message_list.push(MessageEntry::System {
+                                                    text: format!(
+                                                        "Resumed session {} ({} messages)",
+                                                        value, session.messages.len()
+                                                    ),
+                                                    severity: SystemSeverity::Info,
+                                                });
+                                                for msg in &session.messages {
+                                                    if let Some(role) = msg.get("role").and_then(|v| v.as_str()) {
+                                                        let text = msg
+                                                            .get("content")
+                                                            .and_then(|c| {
+                                                                if let Some(s) = c.as_str() {
+                                                                    Some(s.to_string())
+                                                                } else if let Some(arr) = c.as_array() {
+                                                                    Some(arr.iter()
+                                                                        .filter_map(|b| b.get("text").and_then(|v| v.as_str()).map(String::from))
+                                                                        .collect::<Vec<_>>()
+                                                                        .join("\n"))
+                                                                } else {
+                                                                    None
+                                                                }
+                                                            })
+                                                            .unwrap_or_default();
+                                                        match role {
+                                                            "user" => {
+                                                                self.message_list.push(MessageEntry::User {
+                                                                    text: text.clone(),
+                                                                    images: vec![],
+                                                                });
+                                                            }
+                                                            "assistant" => {
+                                                                self.message_list.push(MessageEntry::Assistant {
+                                                                    text: text.clone(),
+                                                                });
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                self.message_list.push(MessageEntry::System {
+                                                    text: format!("Failed to resume session: {}", e),
+                                                    severity: SystemSeverity::Error,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                self.active_picker = None;
+                            }
+                            PickerAction::Cancelled => {
+                                self.active_picker = None;
+                            }
+                            PickerAction::None => {}
+                        }
+                        continue;
+                    }
+
                     // --- Chord detection (multi-key shortcuts) ---
                     if let Some((mod_first, code_first)) = self.pending_chord.take() {
                         // We had a pending chord prefix; check if this key completes it.
@@ -832,6 +995,10 @@ impl App {
                     if text.trim().starts_with('/') {
                         let cmd_ctx = if let Some(ref state) = self.app_state {
                             let s = state.read();
+                            let mu: Vec<(String, u64, u64, u64, u64, f64)> = s.cost_tracker.model_usage()
+                                .into_iter()
+                                .map(|(name, u)| (name, u.input_tokens, u.output_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.cost_usd))
+                                .collect();
                             CommandContext {
                                 cwd: s.cwd.clone(),
                                 project_root: Some(s.project_root.clone()),
@@ -842,6 +1009,17 @@ impl App {
                                 total_cost: s.total_cost_usd(),
                                 vim_mode: s.vim_mode,
                                 plan_mode: s.plan_mode,
+                                fast_mode: s.fast_mode,
+                                brief_mode: s.brief_mode,
+                                cache_read_input_tokens: s.cost_tracker.total_cache_read_input_tokens(),
+                                cache_creation_input_tokens: s.cost_tracker.total_cache_creation_input_tokens(),
+                                turn_count: s.turn_count,
+                                session_duration_ms: s.session_duration().as_millis() as u64,
+                                api_duration_ms: s.cost_tracker.total_api_duration().as_millis() as u64,
+                                tool_duration_ms: s.total_tool_duration_ms as u64,
+                                lines_added: s.cost_tracker.total_lines_added(),
+                                lines_removed: s.cost_tracker.total_lines_removed(),
+                                model_usage: mu,
                             }
                         } else {
                             CommandContext {
@@ -854,6 +1032,17 @@ impl App {
                                 total_cost: self.total_cost,
                                 vim_mode: self.vim_mode,
                                 plan_mode: self.plan_mode,
+                                fast_mode: false,
+                                brief_mode: false,
+                                cache_read_input_tokens: 0,
+                                cache_creation_input_tokens: 0,
+                                turn_count: 0,
+                                session_duration_ms: 0,
+                                api_duration_ms: 0,
+                                tool_duration_ms: 0,
+                                lines_added: 0,
+                                lines_removed: 0,
+                                model_usage: vec![],
                             }
                         };
                         if let Some((cmd, args)) = self.command_registry.parse_and_find(text.trim())
@@ -1029,6 +1218,36 @@ impl App {
                                         severity: SystemSeverity::Info,
                                     });
                                 }
+                                CommandResult::ToggleFastMode => {
+                                    if let Some(ref state) = self.app_state {
+                                        let mut s = state.write();
+                                        s.fast_mode = !s.fast_mode;
+                                        let enabled = s.fast_mode;
+                                        drop(s);
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!(
+                                                "Fast mode {}",
+                                                if enabled { "enabled" } else { "disabled" }
+                                            ),
+                                            severity: SystemSeverity::Info,
+                                        });
+                                    }
+                                }
+                                CommandResult::ToggleBriefMode => {
+                                    if let Some(ref state) = self.app_state {
+                                        let mut s = state.write();
+                                        s.brief_mode = !s.brief_mode;
+                                        let enabled = s.brief_mode;
+                                        drop(s);
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!(
+                                                "Brief mode {}",
+                                                if enabled { "enabled" } else { "disabled" }
+                                            ),
+                                            severity: SystemSeverity::Info,
+                                        });
+                                    }
+                                }
                                 CommandResult::Prompt {
                                     content,
                                     progress_message,
@@ -1039,6 +1258,61 @@ impl App {
                                     self.message_list.push(MessageEntry::System { text: msg, severity: SystemSeverity::Info });
                                     // Send the prompt content as a user message to the engine.
                                     self.pending_input = Some(content);
+                                }
+                                CommandResult::OpenConfigPanel => {
+                                    self.config_panel = Some(
+                                        crate::widgets::config_panel::ConfigPanel::new(
+                                            &self.model_name,
+                                            self.vim_mode,
+                                            self.plan_mode,
+                                        ),
+                                    );
+                                }
+                                CommandResult::OpenPicker(picker_name) => {
+                                    use crate::widgets::picker::{
+                                        ActivePicker, build_model_picker,
+                                        build_session_picker, build_theme_picker,
+                                    };
+                                    match picker_name.as_str() {
+                                        "model" => {
+                                            self.active_picker = Some(ActivePicker::Model(
+                                                build_model_picker(&self.model_name),
+                                            ));
+                                        }
+                                        "theme" => {
+                                            self.active_picker = Some(ActivePicker::Theme(
+                                                build_theme_picker("auto"),
+                                            ));
+                                        }
+                                        "session" => {
+                                            let cwd_str = cwd.to_string_lossy().to_string();
+                                            let project_dir =
+                                                claude_core::session::SessionManager::project_dir_for_cwd(
+                                                    &cwd_str,
+                                                );
+                                            let mgr =
+                                                claude_core::session::SessionManager::new(project_dir);
+                                            match mgr.list_sessions() {
+                                                Ok(sessions) => {
+                                                    self.active_picker = Some(ActivePicker::Session(
+                                                        build_session_picker(&sessions),
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    self.message_list.push(MessageEntry::System {
+                                                        text: format!("Failed to list sessions: {}", e),
+                                                        severity: SystemSeverity::Error,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            self.message_list.push(MessageEntry::System {
+                                                text: format!("Unknown picker: {}", picker_name),
+                                                severity: SystemSeverity::Error,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             continue;

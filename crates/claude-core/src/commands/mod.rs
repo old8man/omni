@@ -107,6 +107,28 @@ pub struct CommandContext {
     pub vim_mode: bool,
     /// Whether plan-mode is currently enabled.
     pub plan_mode: bool,
+    /// Whether fast-mode is currently enabled.
+    pub fast_mode: bool,
+    /// Whether brief-mode is currently enabled.
+    pub brief_mode: bool,
+    /// Cache read input tokens this session.
+    pub cache_read_input_tokens: u64,
+    /// Cache creation input tokens this session.
+    pub cache_creation_input_tokens: u64,
+    /// Number of conversation turns this session.
+    pub turn_count: u64,
+    /// Session wall-clock duration in milliseconds.
+    pub session_duration_ms: u64,
+    /// Total API call duration in milliseconds.
+    pub api_duration_ms: u64,
+    /// Total tool execution duration in milliseconds.
+    pub tool_duration_ms: u64,
+    /// Lines added this session.
+    pub lines_added: u64,
+    /// Lines removed this session.
+    pub lines_removed: u64,
+    /// Per-model usage breakdown: Vec of (model_name, input, output, cache_read, cache_write, cost).
+    pub model_usage: Vec<(String, u64, u64, u64, u64, f64)>,
 }
 
 /// Result type returned by a command.
@@ -136,6 +158,15 @@ pub enum CommandResult {
     TogglePlanMode,
     /// Toggle vim mode.
     ToggleVimMode,
+    /// Toggle fast mode.
+    ToggleFastMode,
+    /// Toggle brief mode.
+    ToggleBriefMode,
+    /// Open the interactive config panel overlay.
+    OpenConfigPanel,
+    /// Open an interactive picker in the TUI.
+    /// The string identifies which picker: "model", "theme", or "session".
+    OpenPicker(String),
 }
 
 /// Trait implemented by every slash command.
