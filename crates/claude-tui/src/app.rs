@@ -63,6 +63,14 @@ struct PendingTool {
     info: ToolUseInfo,
 }
 
+/// State for the Ctrl+E message action popup menu.
+struct ActionMenu {
+    /// The assistant message text being acted upon.
+    text: String,
+    /// The message index in the message list.
+    msg_index: usize,
+}
+
 pub struct App {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     theme: Theme,
@@ -97,6 +105,8 @@ pub struct App {
     notifications: NotificationManager,
     /// Pending input from Prompt-type commands (injected into the next turn)
     pending_input: Option<String>,
+    /// Message action menu state (Ctrl+E popup)
+    action_menu: Option<ActionMenu>,
     /// Tip scheduler for showing tips in the spinner
     tip_scheduler: TipScheduler,
     /// Terminal notification channel (auto-detect)
@@ -134,6 +144,7 @@ impl App {
             focus: FocusManager::new(),
             notifications: NotificationManager::new(),
             pending_input: None,
+            action_menu: None,
             tip_scheduler: {
                 let mut registry = tips::TipRegistry::new();
                 registry.register_all(tips::default_tips());
@@ -420,6 +431,99 @@ impl App {
                         continue;
                     }
 
+                    // --- Action menu routing (Ctrl+E popup) ---
+                    if self.action_menu.is_some() {
+                        match k.code {
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                if let Some(ref menu) = self.action_menu {
+                                    crate::mouse::copy_to_clipboard(&menu.text);
+                                    self.message_list.push(MessageEntry::System {
+                                        text: "Copied to clipboard.".to_string(),
+                                        severity: SystemSeverity::Info,
+                                    });
+                                }
+                                self.action_menu = None;
+                            }
+                            KeyCode::Char('e') | KeyCode::Char('E') => {
+                                if let Some(ref menu) = self.action_menu {
+                                    let text = menu.text.clone();
+                                    self.prompt.clear_buffer();
+                                    self.prompt.insert_paste(&text);
+                                }
+                                self.action_menu = None;
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') => {
+                                if let Some(ref menu) = self.action_menu {
+                                    self.message_list.truncate(menu.msg_index);
+                                    self.message_list.push(MessageEntry::System {
+                                        text: "Conversation rewound.".to_string(),
+                                        severity: SystemSeverity::Info,
+                                    });
+                                }
+                                self.action_menu = None;
+                            }
+                            KeyCode::Char('s') | KeyCode::Char('S') => {
+                                if let Some(ref menu) = self.action_menu {
+                                    // Put a summarize request into the input
+                                    let preview = if menu.text.len() > 100 {
+                                        format!("{}...", &menu.text[..97])
+                                    } else {
+                                        menu.text.clone()
+                                    };
+                                    self.prompt.clear_buffer();
+                                    self.prompt.insert_paste(&format!(
+                                        "Please summarize the following:\n\n{}",
+                                        preview
+                                    ));
+                                }
+                                self.action_menu = None;
+                            }
+                            KeyCode::Esc => {
+                                self.action_menu = None;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    // --- Cmd key shortcuts (macOS) ---
+                    if k.modifiers.contains(KeyModifiers::SUPER) {
+                        match k.code {
+                            KeyCode::Char('c') => {
+                                // Cmd+C: copy selected text (if any)
+                                if self.selection.has_selection() {
+                                    // Selection text extraction is best-effort;
+                                    // for now copy what the clipboard already holds
+                                    // from the selection logic.
+                                    // We don't have buffer text extraction from
+                                    // coordinates, so use prompt text as fallback.
+                                    let text = self.prompt.text();
+                                    if !text.is_empty() {
+                                        crate::mouse::copy_to_clipboard(&text);
+                                    }
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('v') => {
+                                // Cmd+V: paste from clipboard
+                                self.prompt.paste_clipboard();
+                                continue;
+                            }
+                            KeyCode::Char('a') => {
+                                // Cmd+A: select all in input
+                                self.prompt.select_all();
+                                continue;
+                            }
+                            KeyCode::Char('k') => {
+                                // Cmd+K: clear screen
+                                self.message_list.clear();
+                                self.terminal.clear()?;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // --- Permission dialog routing ---
                     if self.permission_dialog.is_some() {
                         match k.code {
@@ -516,13 +620,37 @@ impl App {
                         continue;
                     }
 
-                    // --- Scroll message list with PageUp/PageDown ---
+                    // --- Ctrl+E: open message action menu ---
+                    if matches!(
+                        (k.modifiers, k.code),
+                        (KeyModifiers::CONTROL, KeyCode::Char('e'))
+                    ) {
+                        if let Some(idx) = self.message_list.last_assistant_index() {
+                            if let Some(text) = self.message_list.last_assistant_text() {
+                                self.action_menu = Some(ActionMenu {
+                                    text,
+                                    msg_index: idx,
+                                });
+                            }
+                        }
+                        continue;
+                    }
+
+                    // --- Scroll message list with PageUp/PageDown/Home/End ---
                     if matches!(k.code, KeyCode::PageUp) {
                         self.message_list.scroll_up(10);
                         continue;
                     }
                     if matches!(k.code, KeyCode::PageDown) {
                         self.message_list.scroll_down(10);
+                        continue;
+                    }
+                    if matches!(k.code, KeyCode::Home) {
+                        self.message_list.scroll_to_top();
+                        continue;
+                    }
+                    if matches!(k.code, KeyCode::End) {
+                        self.message_list.scroll_to_bottom();
                         continue;
                     }
 
@@ -1254,6 +1382,33 @@ impl App {
     }
 
     fn handle_key_standalone(&mut self, key: KeyEvent) {
+        // Cmd key shortcuts (macOS)
+        if key.modifiers.contains(KeyModifiers::SUPER) {
+            match key.code {
+                KeyCode::Char('c') => {
+                    let text = self.prompt.text();
+                    if !text.is_empty() {
+                        crate::mouse::copy_to_clipboard(&text);
+                    }
+                    return;
+                }
+                KeyCode::Char('v') => {
+                    self.prompt.paste_clipboard();
+                    return;
+                }
+                KeyCode::Char('a') => {
+                    self.prompt.select_all();
+                    return;
+                }
+                KeyCode::Char('k') => {
+                    self.message_list.clear();
+                    let _ = self.terminal.clear();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => self.should_quit = true,
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
@@ -1328,6 +1483,7 @@ impl App {
         let message_list = &self.message_list;
         let prompt = &self.prompt;
         let permission_dialog = &self.permission_dialog;
+        let action_menu = &self.action_menu;
         let search_overlay = &self.search_overlay;
         let notifications = &self.notifications;
         let input_handler = &self.input_handler;
@@ -1566,6 +1722,49 @@ impl App {
                 let dialog_height = (area.height * 60 / 100).max(12).min(area.height);
                 let dialog_area = crate::layout::centered_rect(70, dialog_height, area);
                 frame.render_widget(dialog, dialog_area);
+            }
+
+            // Action menu overlay (Ctrl+E popup)
+            if action_menu.is_some() {
+                let menu_width = 40u16.min(area.width.saturating_sub(4));
+                let menu_height = 7u16.min(area.height.saturating_sub(4));
+                let menu_x = area.width.saturating_sub(menu_width) / 2;
+                let menu_y = area.height.saturating_sub(menu_height) / 2;
+                let menu_area = Rect::new(menu_x, menu_y, menu_width, menu_height);
+
+                // Render a Clear widget first to blank the area
+                frame.render_widget(ratatui::widgets::Clear, menu_area);
+
+                let block = ratatui::widgets::Block::default()
+                    .title(" Message Actions ")
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan))
+                    .style(ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(30, 30, 40)));
+
+                let menu_lines = vec![
+                    ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(" [C] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::raw("Copy to clipboard"),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(" [E] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::raw("Edit (put in input)"),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(" [R] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::raw("Rewind to here"),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        ratatui::text::Span::styled(" [S] ", ratatui::style::Style::default().fg(ratatui::style::Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)),
+                        ratatui::text::Span::raw("Summarize"),
+                    ]),
+                    ratatui::text::Line::from(ratatui::text::Span::styled(
+                        " Esc to close",
+                        ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                    )),
+                ];
+                let menu_paragraph = ratatui::widgets::Paragraph::new(menu_lines).block(block);
+                frame.render_widget(menu_paragraph, menu_area);
             }
 
             // Search overlay (at bottom of messages area)

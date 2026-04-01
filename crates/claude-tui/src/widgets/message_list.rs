@@ -110,6 +110,8 @@ pub struct MessageList {
     messages: Vec<MessageEntry>,
     scroll_offset: usize,
     sticky_bottom: bool,
+    /// True (default) — follows new messages automatically.
+    auto_scroll: bool,
     /// Active search query for highlighting.
     search_query: Option<String>,
     /// Indices of messages that match the current search.
@@ -133,6 +135,7 @@ impl MessageList {
             messages: Vec::new(),
             scroll_offset: 0,
             sticky_bottom: true,
+            auto_scroll: true,
             search_query: None,
             search_matches: Vec::new(),
             search_focus: 0,
@@ -156,6 +159,9 @@ impl MessageList {
     /// Append a message to the list.
     pub fn push(&mut self, msg: MessageEntry) {
         self.messages.push(msg);
+        if self.auto_scroll {
+            self.scroll_to_bottom();
+        }
         if self.search_query.is_some() {
             self.update_search_matches();
         }
@@ -185,17 +191,26 @@ impl MessageList {
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
         self.sticky_bottom = false;
+        self.auto_scroll = false;
     }
 
     /// Scroll down by the given number of lines.
     pub fn scroll_down(&mut self, lines: usize) {
         self.scroll_offset += lines;
-        // sticky_bottom re-enabled in render if we reach the bottom
+        // sticky_bottom and auto_scroll re-enabled in render if we reach the bottom
     }
 
     /// Jump to the bottom and re-enable auto-scroll.
     pub fn scroll_to_bottom(&mut self) {
         self.sticky_bottom = true;
+        self.auto_scroll = true;
+    }
+
+    /// Jump to the top.
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+        self.sticky_bottom = false;
+        self.auto_scroll = false;
     }
 
     /// Clear all messages and reset scroll.
@@ -203,6 +218,7 @@ impl MessageList {
         self.messages.clear();
         self.scroll_offset = 0;
         self.sticky_bottom = true;
+        self.auto_scroll = true;
         self.search_query = None;
         self.search_matches.clear();
         self.search_focus = 0;
@@ -315,6 +331,88 @@ impl MessageList {
     /// Return the message index of the current focused search match, if any.
     pub fn current_search_match_message(&self) -> Option<usize> {
         self.search_matches.get(self.search_focus).copied()
+    }
+
+    /// Return the text of the last assistant message, if any.
+    pub fn last_assistant_text(&self) -> Option<String> {
+        for msg in self.messages.iter().rev() {
+            if let MessageEntry::Assistant { text } = msg {
+                return Some(text.clone());
+            }
+        }
+        None
+    }
+
+    /// Return the index of the last assistant message, if any.
+    pub fn last_assistant_index(&self) -> Option<usize> {
+        for (i, msg) in self.messages.iter().enumerate().rev() {
+            if let MessageEntry::Assistant { .. } = msg {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Truncate messages to keep only up to (and including) the given index.
+    pub fn truncate(&mut self, up_to_inclusive: usize) {
+        if up_to_inclusive + 1 < self.messages.len() {
+            self.messages.truncate(up_to_inclusive + 1);
+        }
+        if self.search_query.is_some() {
+            self.update_search_matches();
+        }
+    }
+
+    /// Estimate the rendered height of a single message (in terminal lines).
+    pub fn estimate_message_height(&self, msg: &MessageEntry, width: u16) -> usize {
+        let w = width.max(1) as usize;
+        match msg {
+            MessageEntry::User { text, images } => {
+                // blank + badge + text lines + images
+                2 + text.lines().count().max(1).saturating_add(
+                    text.lines().map(|l| l.len() / w).sum::<usize>()
+                ) + images.len()
+            }
+            MessageEntry::Assistant { text } => {
+                // blank + badge + text lines
+                2 + text.lines().count().max(1).saturating_add(
+                    text.lines().map(|l| l.len() / w).sum::<usize>()
+                )
+            }
+            MessageEntry::ToolUse { input, .. } => {
+                // tool header + compact summary
+                2 + if self.expanded.contains(&0) {
+                    serde_json::to_string_pretty(input)
+                        .unwrap_or_default()
+                        .lines()
+                        .count()
+                } else {
+                    1
+                }
+            }
+            MessageEntry::ToolResult { output, .. } => {
+                2 + output.lines().count().min(COLLAPSE_THRESHOLD + 1)
+            }
+            MessageEntry::Thinking { text, is_collapsed } => {
+                if *is_collapsed {
+                    1 + THINKING_PREVIEW_LINES
+                } else {
+                    1 + text.lines().count()
+                }
+            }
+            MessageEntry::System { .. } => 1,
+            MessageEntry::CompactBoundary { .. } => 3,
+            MessageEntry::CommandOutput { output, .. } => 1 + output.lines().count(),
+            MessageEntry::ErrorRetry { error, .. } => if error.is_empty() { 1 } else { 2 },
+            MessageEntry::RateLimitWarning { .. } => 2,
+            MessageEntry::PermissionRequest { input_preview, .. } => {
+                if input_preview.is_empty() { 1 } else { 2 }
+            }
+            MessageEntry::AgentStatus { .. } => 1,
+            MessageEntry::DiffPreview { diff_text, .. } => {
+                1 + diff_text.lines().count().min(COLLAPSE_THRESHOLD + 1)
+            }
+        }
     }
 
     /// Recompute which message indices match the search query.
@@ -1029,13 +1127,41 @@ impl<'a> Widget for MessageListWidget<'a> {
                 .min(total_lines.saturating_sub(visible_height))
         };
 
-        let visible = &all_lines[scroll..total_lines.min(scroll + visible_height)];
+        // Count lines above and below the visible window
+        let lines_above = scroll;
+        let visible_end = total_lines.min(scroll + visible_height);
+        let lines_below = total_lines.saturating_sub(visible_end);
+
+        let visible = &all_lines[scroll..visible_end];
         for (i, line) in visible.iter().enumerate() {
             let y = area.y + i as u16;
             if y >= area.y + area.height {
                 break;
             }
             buf.set_line(area.x, y, line, area.width);
+        }
+
+        // Show "N more" indicators when scrolled
+        if lines_above > 0 && area.height > 0 {
+            let indicator = format!(" \u{25b2} {} more above ", lines_above);
+            let indicator_line = Line::from(Span::styled(
+                indicator,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+            buf.set_line(area.x, area.y, &indicator_line, area.width);
+        }
+        if lines_below > 0 && area.height > 1 {
+            let indicator = format!(" \u{25bc} {} more below ", lines_below);
+            let indicator_line = Line::from(Span::styled(
+                indicator,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+            let bottom_y = area.y + area.height - 1;
+            buf.set_line(area.x, bottom_y, &indicator_line, area.width);
         }
     }
 }
