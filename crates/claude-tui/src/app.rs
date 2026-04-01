@@ -1442,32 +1442,43 @@ impl App {
 
             // Completion popup (rendered above input area so it's not clipped)
             if let Some(ref comp) = prompt.completion {
-                let max_items = comp.items.len().min(10);
-                let popup_height = max_items as u16;
+                let max_visible = comp.items.len().min(10);
+                let popup_height = max_visible as u16;
                 // Position popup above the input area
                 let popup_y = layout.input.y.saturating_sub(popup_height);
                 let popup_x = layout.input.x + 2; // align with "> " prefix
 
-                // Compute widths
-                let max_label_w = comp.items.iter().take(max_items)
+                // Scroll window so selected item is always visible
+                let scroll_start = if comp.selected >= max_visible {
+                    comp.selected - max_visible + 1
+                } else {
+                    0
+                };
+
+                // Compute widths from ALL items (not just visible window)
+                let max_label_w = comp.items.iter()
                     .map(|item| item.label.len())
                     .max()
                     .unwrap_or(10)
                     .min(30);
-                let max_desc_w = comp.items.iter().take(max_items)
+                let max_desc_w = comp.items.iter()
                     .filter_map(|item| item.description.as_ref())
                     .map(|d| d.len())
                     .max()
                     .unwrap_or(0)
                     .min(40);
-                let entry_width = (max_label_w + max_desc_w + 3).min(area.width as usize - 4) as u16;
+                let entry_width = (max_label_w + max_desc_w + 4).min(area.width as usize - 4) as u16;
 
-                for (i, item) in comp.items.iter().enumerate().take(max_items) {
-                    let y = popup_y + i as u16;
+                for (display_idx, item_idx) in (scroll_start..comp.items.len())
+                    .enumerate()
+                    .take(max_visible)
+                {
+                    let item = &comp.items[item_idx];
+                    let y = popup_y + display_idx as u16;
                     if y >= layout.input.y {
                         break;
                     }
-                    let is_selected = i == comp.selected;
+                    let is_selected = item_idx == comp.selected;
                     let label_style = if is_selected {
                         ratatui::style::Style::default()
                             .fg(ratatui::style::Color::Black)
@@ -1504,6 +1515,34 @@ impl App {
                         ratatui::widgets::Paragraph::new(line),
                         ratatui::layout::Rect::new(popup_x, y, entry_width, 1),
                     );
+                }
+
+                // Scroll indicators
+                let indicator_x = popup_x + entry_width;
+                if indicator_x < area.width {
+                    if scroll_start > 0 {
+                        // Show "▲" at top
+                        let up_span = ratatui::text::Span::styled(
+                            "▲",
+                            ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                        );
+                        frame.render_widget(
+                            ratatui::widgets::Paragraph::new(ratatui::text::Line::from(up_span)),
+                            ratatui::layout::Rect::new(indicator_x, popup_y, 2, 1),
+                        );
+                    }
+                    if scroll_start + max_visible < comp.items.len() {
+                        // Show "▼" at bottom
+                        let down_y = popup_y + popup_height.saturating_sub(1);
+                        let down_span = ratatui::text::Span::styled(
+                            "▼",
+                            ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                        );
+                        frame.render_widget(
+                            ratatui::widgets::Paragraph::new(ratatui::text::Line::from(down_span)),
+                            ratatui::layout::Rect::new(indicator_x, down_y, 2, 1),
+                        );
+                    }
                 }
             }
 
