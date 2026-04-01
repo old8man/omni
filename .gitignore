@@ -1,0 +1,10 @@
+/internal
+/target
+.claude/
+.env
+.env.*
+*.credentials*
+.credentials.json
+*.swp
+*.swo
+.DS_Store
