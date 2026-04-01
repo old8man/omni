@@ -138,6 +138,8 @@ pub struct App {
     pub(crate) config_panel: Option<crate::widgets::config_panel::ConfigPanel>,
     /// Active picker overlay (model, theme, or session selector).
     pub(crate) active_picker: Option<crate::widgets::picker::ActivePicker>,
+    /// Profile manager overlay (opened via /profile).
+    pub(crate) profile_manager: Option<crate::widgets::profile_manager::ProfileManager>,
 }
 
 impl App {
@@ -204,6 +206,7 @@ impl App {
             context_warning_shown: false,
             config_panel: None,
             active_picker: None,
+            profile_manager: None,
         })
     }
 
@@ -468,6 +471,58 @@ impl App {
                         continue;
                     }
 
+                    // --- Profile manager overlay intercepts all keys ---
+                    if self.profile_manager.is_some() {
+                        use crate::widgets::profile_manager::ProfileManagerAction;
+                        let action = self.profile_manager.as_mut().unwrap().handle_key(k.code);
+                        match action {
+                            ProfileManagerAction::Consumed => {}
+                            ProfileManagerAction::Close => {
+                                self.profile_manager = None;
+                            }
+                            ProfileManagerAction::SwitchTo(name) => {
+                                match claude_core::auth::profiles::set_active_profile(&name) {
+                                    Ok(()) => {
+                                        let display = claude_core::auth::profiles::get_active_profile()
+                                            .map(|p| p.display_name())
+                                            .unwrap_or_else(|| name.clone());
+                                        self.flash_success(format!("Switched to {}", display));
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!("Switched to profile: {}", display),
+                                            severity: SystemSeverity::Info,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        self.message_list.push(MessageEntry::System {
+                                            text: format!("Failed to switch profile: {}", e),
+                                            severity: SystemSeverity::Error,
+                                        });
+                                    }
+                                }
+                                self.profile_manager = None;
+                            }
+                            ProfileManagerAction::AddNew => {
+                                self.message_list.push(MessageEntry::System {
+                                    text: "Use /login to add a new profile via OAuth.".to_string(),
+                                    severity: SystemSeverity::Info,
+                                });
+                                self.profile_manager = None;
+                            }
+                            ProfileManagerAction::Deleted(name) => {
+                                self.flash_success(format!("Removed profile: {}", name));
+                                self.message_list.push(MessageEntry::System {
+                                    text: format!("Removed profile: {}", name),
+                                    severity: SystemSeverity::Info,
+                                });
+                                // If list is now empty, close the panel.
+                                if self.profile_manager.as_ref().map_or(true, |pm| pm.is_empty()) {
+                                    self.profile_manager = None;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
                     // --- Picker overlay intercepts all keys ---
                     if self.active_picker.is_some() {
                         use crate::widgets::picker::PickerAction;
@@ -479,6 +534,7 @@ impl App {
                                     crate::widgets::picker::ActivePicker::Model(_) => "model",
                                     crate::widgets::picker::ActivePicker::Theme(_) => "theme",
                                     crate::widgets::picker::ActivePicker::Session(_) => "session",
+                                    crate::widgets::picker::ActivePicker::Profile(_) => "profile",
                                 };
                                 match picker_kind {
                                     "model" => {
@@ -558,6 +614,26 @@ impl App {
                                             Err(e) => {
                                                 self.message_list.push(MessageEntry::System {
                                                     text: format!("Failed to resume session: {}", e),
+                                                    severity: SystemSeverity::Error,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    "profile" => {
+                                        match claude_core::auth::profiles::set_active_profile(&value) {
+                                            Ok(()) => {
+                                                let display = claude_core::auth::profiles::get_active_profile()
+                                                    .map(|p| p.display_name())
+                                                    .unwrap_or_else(|| value.clone());
+                                                self.flash_success(format!("Switched to {}", display));
+                                                self.message_list.push(MessageEntry::System {
+                                                    text: format!("Switched to profile: {}", display),
+                                                    severity: SystemSeverity::Info,
+                                                });
+                                            }
+                                            Err(e) => {
+                                                self.message_list.push(MessageEntry::System {
+                                                    text: format!("Failed to switch profile: {}", e),
                                                     severity: SystemSeverity::Error,
                                                 });
                                             }
@@ -1268,10 +1344,16 @@ impl App {
                                         ),
                                     );
                                 }
+                                CommandResult::OpenProfileManager => {
+                                    self.profile_manager = Some(
+                                        crate::widgets::profile_manager::ProfileManager::new(),
+                                    );
+                                }
                                 CommandResult::OpenPicker(picker_name) => {
                                     use crate::widgets::picker::{
                                         ActivePicker, build_model_picker,
-                                        build_session_picker, build_theme_picker,
+                                        build_profile_picker, build_session_picker,
+                                        build_theme_picker,
                                     };
                                     match picker_name.as_str() {
                                         "model" => {
@@ -1305,6 +1387,11 @@ impl App {
                                                     });
                                                 }
                                             }
+                                        }
+                                        "profile" => {
+                                            self.active_picker = Some(ActivePicker::Profile(
+                                                build_profile_picker(),
+                                            ));
                                         }
                                         _ => {
                                             self.message_list.push(MessageEntry::System {

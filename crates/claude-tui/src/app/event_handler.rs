@@ -26,6 +26,22 @@ impl App {
             return;
         }
 
+        // Profile manager overlay intercepts all keys when open.
+        if self.profile_manager.is_some() {
+            use crate::widgets::profile_manager::ProfileManagerAction;
+            let action = self.profile_manager.as_mut().unwrap().handle_key(key.code);
+            match action {
+                ProfileManagerAction::Consumed => {}
+                ProfileManagerAction::Close
+                | ProfileManagerAction::SwitchTo(_)
+                | ProfileManagerAction::AddNew
+                | ProfileManagerAction::Deleted(_) => {
+                    self.profile_manager = None;
+                }
+            }
+            return;
+        }
+
         // Config panel overlay intercepts all keys when open.
         if self.config_panel.is_some() {
             use crate::widgets::config_panel::ConfigPanelAction;

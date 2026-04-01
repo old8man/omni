@@ -49,6 +49,7 @@ mod passes;
 mod permissions;
 mod plan;
 mod plugin;
+mod profile;
 mod pr_comments;
 mod privacy_settings;
 mod quit;
@@ -167,6 +168,8 @@ pub enum CommandResult {
     /// Open an interactive picker in the TUI.
     /// The string identifies which picker: "model", "theme", or "session".
     OpenPicker(String),
+    /// Open the interactive profile manager overlay.
+    OpenProfileManager,
 }
 
 /// Trait implemented by every slash command.
@@ -308,6 +311,7 @@ impl CommandRegistry {
         // Auth commands
         reg.register(Box::new(login::LoginCommand));
         reg.register(Box::new(login::LogoutCommand));
+        reg.register(Box::new(profile::ProfileCommand));
 
         // Project commands
         reg.register(Box::new(init::InitCommand));

@@ -463,6 +463,7 @@ pub enum ActivePicker {
     Model(PickerState<String>),
     Theme(PickerState<String>),
     Session(PickerState<String>),
+    Profile(PickerState<String>),
 }
 
 impl ActivePicker {
@@ -472,6 +473,7 @@ impl ActivePicker {
             ActivePicker::Model(ref mut state) => state.handle_key(key),
             ActivePicker::Theme(ref mut state) => state.handle_key(key),
             ActivePicker::Session(ref mut state) => state.handle_key(key),
+            ActivePicker::Profile(ref mut state) => state.handle_key(key),
         }
     }
 
@@ -481,8 +483,47 @@ impl ActivePicker {
             ActivePicker::Model(ref state) => PickerWidget::new(state).render(area, buf),
             ActivePicker::Theme(ref state) => PickerWidget::new(state).render(area, buf),
             ActivePicker::Session(ref state) => PickerWidget::new(state).render(area, buf),
+            ActivePicker::Profile(ref state) => PickerWidget::new(state).render(area, buf),
         }
     }
+}
+
+/// Build a profile picker populated with all configured profiles.
+pub fn build_profile_picker() -> PickerState<String> {
+    use claude_core::auth::profiles;
+
+    let all_profiles = profiles::list_profiles();
+    let active_name = profiles::get_active_profile_name();
+
+    let items: Vec<PickerItem<String>> = all_profiles
+        .iter()
+        .map(|p| {
+            let is_active = active_name.as_deref() == Some(p.name.as_str());
+            let status = p.status_label(active_name.as_deref());
+            let badge_text = match status {
+                "active" => Some("Active".to_string()),
+                "expired" => Some("Expired".to_string()),
+                _ => None,
+            };
+            let sub = match p.subscription_type.as_str() {
+                "pro" => "Pro",
+                "max" => "Max",
+                "team" => "Team",
+                "enterprise" => "Enterprise",
+                "api" => "API",
+                _ => &p.subscription_type,
+            };
+            PickerItem {
+                label: p.name.clone(),
+                description: Some(format!("{} - {}", p.email, sub)),
+                value: p.name.clone(),
+                is_current: is_active,
+                badge: badge_text,
+            }
+        })
+        .collect();
+
+    PickerState::new("Switch Profile", items)
 }
 
 /// Build a model picker populated with known Claude models.

@@ -201,6 +201,26 @@ pub async fn initialize(config: BootstrapConfig) -> Result<BootstrapResult> {
     }
     info!("bootstrap: model = {model}");
 
+    // ── 4b. Clean up expired profiles ─────────────────────────────────
+    let removed_profiles = crate::auth::profiles::remove_expired_profiles();
+    if !removed_profiles.is_empty() {
+        debug!(
+            "bootstrap: removed {} expired profile(s)",
+            removed_profiles.len()
+        );
+    }
+
+    // Check if active profile is expired and warn
+    if let Some(active_profile) = crate::auth::profiles::get_active_profile() {
+        if active_profile.is_expired() && active_profile.credentials.refresh_token.is_none() {
+            warn!(
+                "Active profile '{}' has expired with no refresh token. \
+                 Use /profile switch to select another profile or /login to re-authenticate.",
+                active_profile.name
+            );
+        }
+    }
+
     // ── 5. Resolve authentication ───────────────────────────────────────
     let auth = resolve_auth().await.unwrap_or(AuthResolution::None);
     debug!("bootstrap: auth resolved");

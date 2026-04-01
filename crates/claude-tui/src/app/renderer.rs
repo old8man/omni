@@ -423,6 +423,13 @@ impl App {
                 frame.render_widget(notif_widget, notif_area);
             }
 
+            // Profile manager overlay (drawn over everything)
+            if let Some(ref pm) = self.profile_manager {
+                let pm_height = area.height.saturating_sub(4).max(10);
+                let pm_area = crate::layout::centered_rect(70, pm_height, area);
+                frame.render_widget(pm, pm_area);
+            }
+
             // Config panel overlay (full-screen, drawn last so it covers everything)
             if let Some(ref panel) = config_panel {
                 let panel_height = area.height.saturating_sub(2).max(10);
