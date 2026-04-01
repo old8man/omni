@@ -13,6 +13,32 @@ use super::App;
 
 impl App {
     pub(crate) fn handle_key_standalone(&mut self, key: KeyEvent) {
+        // Info dialog overlay intercepts all keys when open.
+        if self.info_dialog.is_some() {
+            use crate::widgets::info_dialog::InfoDialogAction;
+            let action = self.info_dialog.as_mut().unwrap().handle_key(key.code);
+            match action {
+                InfoDialogAction::Close => {
+                    self.info_dialog = None;
+                }
+                InfoDialogAction::Consumed => {}
+            }
+            return;
+        }
+
+        // Status dialog overlay intercepts all keys when open.
+        if self.status_dialog.is_some() {
+            use crate::widgets::status_dialog::StatusDialogAction;
+            let action = self.status_dialog.as_mut().unwrap().handle_key(key.code);
+            match action {
+                StatusDialogAction::Close => {
+                    self.status_dialog = None;
+                }
+                StatusDialogAction::Consumed => {}
+            }
+            return;
+        }
+
         // Login dialog overlay intercepts all keys when open.
         if self.login_dialog.is_some() {
             use crate::widgets::login_dialog::LoginDialogAction;

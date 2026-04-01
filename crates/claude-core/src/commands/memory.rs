@@ -38,12 +38,16 @@ impl Command for MemoryCommand {
             }
         }
 
-        if found.is_empty() {
-            CommandResult::Output("No CLAUDE.md files found.".to_string())
+        let content = if found.is_empty() {
+            "No CLAUDE.md files found.".to_string()
         } else {
             let mut lines = vec![format!("Found {} CLAUDE.md file(s):", found.len())];
             lines.extend(found);
-            CommandResult::Output(lines.join("\n"))
+            lines.join("\n")
+        };
+        CommandResult::OpenInfoDialog {
+            title: "Memory Files".to_string(),
+            content,
         }
     }
 }

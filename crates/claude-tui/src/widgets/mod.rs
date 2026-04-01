@@ -1,4 +1,5 @@
 pub mod agent_status;
+pub mod info_dialog;
 pub mod config_panel;
 pub mod context_panel;
 pub mod diff_view;
@@ -12,4 +13,5 @@ pub mod prompt_input;
 pub mod search_overlay;
 pub mod spinner;
 pub mod status_bar;
+pub mod status_dialog;
 pub mod welcome;

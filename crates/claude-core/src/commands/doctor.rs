@@ -143,6 +143,9 @@ impl Command for DoctorCommand {
         }
         lines.push(format!("  CWD: {}", ctx.cwd.display()));
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Diagnostics".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

@@ -24,15 +24,14 @@ impl Command for InstallSlackAppCommand {
     async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
         let opened = open_browser(SLACK_APP_URL);
 
-        if opened {
-            CommandResult::Output(
-                "Opening Slack app installation page in browser...".to_string(),
-            )
+        let content = if opened {
+            format!("Opening Slack app installation page in browser...\n\n  {}", SLACK_APP_URL)
         } else {
-            CommandResult::Output(format!(
-                "Couldn't open browser. Visit: {}",
-                SLACK_APP_URL
-            ))
+            format!("Install the Claude Slack app:\n\n  {}", SLACK_APP_URL)
+        };
+        CommandResult::OpenInfoDialog {
+            title: "Slack App Setup".to_string(),
+            content,
         }
     }
 }

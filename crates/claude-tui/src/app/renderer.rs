@@ -66,6 +66,9 @@ impl App {
         let selection = &self.selection;
         let config_panel = &self.config_panel;
         let active_picker = &self.active_picker;
+        let status_dialog = &self.status_dialog;
+        let info_dialog = &self.info_dialog;
+        let active_profile_name = self.active_profile_name.clone();
         let show_welcome = message_list.is_empty() && !spinner.active;
         // Read live state from AppStateStore (non-blocking try_read to avoid
         // stalling the 60fps render loop if the engine holds a write lock).
@@ -116,25 +119,49 @@ impl App {
                 true, // always show status bar
             );
 
-            // Header: "Claude Code (Rust) | model"
-            let header_spans = vec![
-                ratatui::text::Span::styled(
-                    " Claude Code (Rust)",
-                    ratatui::style::Style::new()
-                        .fg(theme.accent)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-                ratatui::text::Span::styled(
-                    " | ",
-                    ratatui::style::Style::new().fg(theme.border),
-                ),
-                ratatui::text::Span::styled(
-                    &state_model,
-                    ratatui::style::Style::new().fg(theme.muted),
-                ),
-            ];
-            let header = Paragraph::new(ratatui::text::Line::from(header_spans));
-            frame.render_widget(header, layout.header);
+            // Header: " OMNI  Sonnet 4.6"  ...right... "● user@example.com (Pro) "
+            {
+                let left_text = format!(" OMNI  {}", state_model);
+                let left_len = left_text.chars().count();
+
+                let right_text = match &active_profile_name {
+                    Some(name) => format!("● {} ", name),
+                    None => String::new(),
+                };
+                let right_len = right_text.chars().count();
+
+                let width = layout.header.width as usize;
+                let pad = width.saturating_sub(left_len + right_len);
+                let padding = " ".repeat(pad);
+
+                let mut header_spans = vec![
+                    ratatui::text::Span::styled(
+                        " OMNI",
+                        ratatui::style::Style::new()
+                            .fg(theme.accent)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                    ratatui::text::Span::styled(
+                        "  ",
+                        ratatui::style::Style::new().fg(theme.border),
+                    ),
+                    ratatui::text::Span::styled(
+                        state_model.clone(),
+                        ratatui::style::Style::new().fg(theme.muted),
+                    ),
+                    ratatui::text::Span::raw(padding),
+                ];
+                if let Some(ref name) = active_profile_name {
+                    header_spans.push(ratatui::text::Span::styled(
+                        format!("● {} ", name),
+                        ratatui::style::Style::new()
+                            .fg(ratatui::style::Color::Green)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ));
+                }
+                let header = Paragraph::new(ratatui::text::Line::from(header_spans));
+                frame.render_widget(header, layout.header);
+            }
 
             // Header separator
             let border_line = "\u{2500}".repeat(area.width as usize);
@@ -339,6 +366,7 @@ impl App {
                 session_name: state_agent_name.clone(),
                 rate_limited: false,
                 flash: state_flash.clone(),
+                profile_name: active_profile_name.clone(),
             };
             let status_widget = StatusBarWidget::new(&status_state);
             frame.render_widget(status_widget, layout.status_bar);
@@ -440,6 +468,16 @@ impl App {
                 let panel_height = area.height.saturating_sub(2).max(10);
                 let panel_area = crate::layout::centered_rect(85, panel_height, area);
                 frame.render_widget(panel, panel_area);
+            }
+
+            // Status dialog overlay (drawn on top of everything)
+            if let Some(ref sd) = status_dialog {
+                frame.render_widget(sd, area);
+            }
+
+            // Generic info dialog overlay (drawn on top of everything)
+            if let Some(ref id) = info_dialog {
+                frame.render_widget(id, area);
             }
 
             // Picker overlay (drawn on top of everything)

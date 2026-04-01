@@ -92,6 +92,8 @@ pub struct StatusBarState {
     pub rate_limited: bool,
     /// Flash message (shown temporarily on the right side).
     pub flash: Option<FlashMessage>,
+    /// Active profile display name shown in the status bar, e.g. "user@gmail.com (Pro)".
+    pub profile_name: Option<String>,
 }
 
 impl Default for StatusBarState {
@@ -107,6 +109,7 @@ impl Default for StatusBarState {
             session_name: None,
             rate_limited: false,
             flash: None,
+            profile_name: None,
         }
     }
 }
@@ -123,55 +126,6 @@ impl<'a> StatusBarWidget<'a> {
     }
 }
 
-/// Return a display color for the model based on its family.
-fn model_color(model: &str) -> Color {
-    let lower = model.to_lowercase();
-    if lower.contains("opus") {
-        Color::Magenta
-    } else if lower.contains("sonnet") {
-        Color::Cyan
-    } else if lower.contains("haiku") {
-        Color::Green
-    } else {
-        Color::White
-    }
-}
-
-/// Derive a short display name from a full model identifier.
-///
-/// Examples:
-///   "claude-opus-4-6"   -> "Opus 4.6"
-///   "claude-sonnet-4-6" -> "Sonnet 4.6"
-///   "claude-haiku-3-5"  -> "Haiku 3.5"
-///   anything else       -> passed through as-is
-fn short_model_name(model: &str) -> String {
-    let lower = model.to_lowercase();
-    // Try to extract family and version from patterns like "claude-opus-4-6"
-    for family in &["opus", "sonnet", "haiku"] {
-        if let Some(pos) = lower.find(family) {
-            let rest = &model[pos + family.len()..];
-            // rest might be "-4-6" or "-4-20250514" etc.
-            let digits: String = rest
-                .trim_start_matches('-')
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '-')
-                .collect();
-            let version = digits.replace('-', ".");
-            // Remove trailing dots
-            let version = version.trim_end_matches('.').to_string();
-            let cap = format!(
-                "{}{}",
-                family.chars().next().unwrap().to_uppercase(),
-                &family[1..]
-            );
-            if version.is_empty() {
-                return cap;
-            }
-            return format!("{} {}", cap, version);
-        }
-    }
-    model.to_string()
-}
 
 /// Color for the context window percentage indicator.
 fn context_color(pct: f64) -> Color {
@@ -206,20 +160,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
         };
 
         // ── Left section ────────────────────────────────────────────────
-        let mut left_spans: Vec<Span> = Vec::new();
-
-        // Product name
-        left_spans.push(Span::styled(
-            " Claude Code",
-            bg_style(Color::Cyan).add_modifier(Modifier::BOLD),
-        ));
-
-        left_spans.push(sep.clone());
-
-        // Model name (colored by family)
-        let display_model = short_model_name(&self.state.model_name);
-        let m_color = model_color(&self.state.model_name);
-        left_spans.push(Span::styled(display_model, bg_style(m_color)));
+        let left_spans: Vec<Span> = Vec::new();
 
         // ── Center section ──────────────────────────────────────────────
         let mut center_spans: Vec<Span> = Vec::new();
@@ -373,22 +314,6 @@ mod tests {
         assert_eq!(format_cost(1.5), "$1.50");
         assert_eq!(format_cost(10.0), "$10.00");
         assert_eq!(format_cost(150.0), "$150");
-    }
-
-    #[test]
-    fn test_short_model_name() {
-        assert_eq!(short_model_name("claude-opus-4-6"), "Opus 4.6");
-        assert_eq!(short_model_name("claude-sonnet-4-6"), "Sonnet 4.6");
-        assert_eq!(short_model_name("claude-haiku-3-5"), "Haiku 3.5");
-        assert_eq!(short_model_name("gpt-4"), "gpt-4");
-    }
-
-    #[test]
-    fn test_model_color() {
-        assert_eq!(model_color("claude-opus-4-6"), Color::Magenta);
-        assert_eq!(model_color("claude-sonnet-4-6"), Color::Cyan);
-        assert_eq!(model_color("claude-haiku-3-5"), Color::Green);
-        assert_eq!(model_color("unknown-model"), Color::White);
     }
 
     #[test]

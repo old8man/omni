@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use super::{Command, CommandContext, CommandResult};
 
-/// Shows current session status.
+/// Shows comprehensive session / system status in a TUI dialog overlay.
 pub struct StatusCommand;
 
 #[async_trait]
@@ -12,20 +12,10 @@ impl Command for StatusCommand {
     }
 
     fn description(&self) -> &str {
-        "Show session status"
+        "Show comprehensive session and system status"
     }
 
-    async fn execute(&self, _args: &str, ctx: &CommandContext) -> CommandResult {
-        let session = ctx.session_id.as_deref().unwrap_or("(no active session)");
-        let lines = [
-            format!("Session: {}", session),
-            format!("Model:   {}", ctx.model),
-            format!(
-                "Tokens:  {} in / {} out",
-                ctx.input_tokens, ctx.output_tokens
-            ),
-            format!("Cost:    ${:.4}", ctx.total_cost),
-        ];
-        CommandResult::Output(lines.join("\n"))
+    async fn execute(&self, _args: &str, _ctx: &CommandContext) -> CommandResult {
+        CommandResult::OpenStatusDialog
     }
 }

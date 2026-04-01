@@ -75,6 +75,9 @@ impl Command for CostCommand {
             }
         }
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Session Cost".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

@@ -40,11 +40,10 @@ impl Command for TerminalSetupCommand {
             .iter()
             .find(|(id, _)| *id == terminal_ref)
         {
-            return CommandResult::Output(format!(
-                "{} natively supports the Shift+Enter keybinding.\n\
-                 No additional setup is needed.",
-                display_name
-            ));
+            return CommandResult::OpenInfoDialog {
+                title: "Terminal Setup".to_string(),
+                content: format!("{} natively supports the Shift+Enter keybinding.\nNo additional setup is needed.", display_name),
+            };
         }
 
         let is_apple_terminal = terminal_ref == "Apple_Terminal";
@@ -127,6 +126,9 @@ impl Command for TerminalSetupCommand {
             );
         }
 
-        CommandResult::Output(output)
+        CommandResult::OpenInfoDialog {
+            title: "Terminal Setup".to_string(),
+            content: output,
+        }
     }
 }

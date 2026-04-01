@@ -80,6 +80,9 @@ impl Command for StatsCommand {
             lines.push(format!("  Lines removed:   -{}", format_number(ctx.lines_removed)));
         }
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Session Statistics".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

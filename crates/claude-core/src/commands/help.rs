@@ -81,13 +81,16 @@ impl Command for HelpCommand {
                 } else {
                     format!(" {}", cmd.usage_hint())
                 };
-                return CommandResult::Output(format!(
-                    "/{}{}\n{}\n{}",
-                    cmd.name(),
-                    usage,
-                    cmd.description(),
-                    alias_str,
-                ));
+                return CommandResult::OpenInfoDialog {
+                    title: format!("/{}", cmd.name()),
+                    content: format!(
+                        "/{}{}\n{}\n{}",
+                        cmd.name(),
+                        usage,
+                        cmd.description(),
+                        alias_str,
+                    ),
+                };
             } else {
                 return CommandResult::Output(format!("Unknown command: /{trimmed}. Type /help for a list."));
             }
@@ -169,6 +172,9 @@ impl Command for HelpCommand {
         lines.push(String::new());
         lines.push("Type /help <command> for details on a specific command.".to_string());
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Help".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

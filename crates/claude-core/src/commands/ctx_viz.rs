@@ -110,7 +110,10 @@ impl Command for CtxVizCommand {
         output.push_str(&format!("{}  {}  Tool calls/results\n", COLOR_TOOL, RESET));
         output.push_str(&format!("{}  {}  Available context\n", COLOR_EMPTY, RESET));
 
-        CommandResult::Output(output)
+        CommandResult::OpenInfoDialog {
+            title: "Context Visualization".to_string(),
+            content: output,
+        }
     }
 }
 

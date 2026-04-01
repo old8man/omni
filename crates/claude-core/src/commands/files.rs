@@ -33,11 +33,14 @@ impl Command for FilesCommand {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| cwd.display().to_string());
 
-        CommandResult::Output(format!(
-            "Files in context:\n  (working directory: {})\n\n\
-             No files have been read into context yet. \
-             Files are added as you reference them in conversation.",
-            project
-        ))
+        CommandResult::OpenInfoDialog {
+            title: "Files in Context".to_string(),
+            content: format!(
+                "Files in context:\n  (working directory: {})\n\n\
+                 No files have been read into context yet. \
+                 Files are added as you reference them in conversation.",
+                project
+            ),
+        }
     }
 }

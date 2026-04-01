@@ -30,16 +30,19 @@ impl Command for ReleaseNotesCommand {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 let notes = parse_changelog(&content);
                 if !notes.is_empty() {
-                    return CommandResult::Output(format_release_notes(&notes));
+                    return CommandResult::OpenInfoDialog {
+                        title: "Release Notes".to_string(),
+                        content: format_release_notes(&notes),
+                    };
                 }
             }
         }
 
         // Fallback: show link
-        CommandResult::Output(format!(
-            "See the full changelog at: {}",
-            CHANGELOG_URL
-        ))
+        CommandResult::OpenInfoDialog {
+            title: "Release Notes".to_string(),
+            content: format!("See the full changelog at: {}", CHANGELOG_URL),
+        }
     }
 }
 

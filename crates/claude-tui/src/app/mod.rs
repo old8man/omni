@@ -148,9 +148,41 @@ pub struct App {
     pub(crate) profile_manager: Option<crate::widgets::profile_manager::ProfileManager>,
     /// Login dialog overlay (opened via /login).
     pub(crate) login_dialog: Option<crate::widgets::login_dialog::LoginDialog>,
+    /// Status dialog overlay (opened via /status).
+    pub(crate) status_dialog: Option<crate::widgets::status_dialog::StatusDialog>,
+    /// Generic info dialog overlay (opened by /help, /usage, /doctor, etc.).
+    pub(crate) info_dialog: Option<crate::widgets::info_dialog::InfoDialog>,
+    /// Display name of the active profile (shown in header).
+    pub(crate) active_profile_name: Option<String>,
+    /// Set to true after a clean shutdown so the Drop impl skips the second restore.
+    pub(crate) cleaned_up: bool,
 }
 
 impl App {
+    /// Restore the terminal to its original state.
+    ///
+    /// Safe to call more than once — subsequent calls are no-ops.
+    pub(crate) fn cleanup(&mut self) {
+        if self.cleaned_up {
+            return;
+        }
+        self.cleaned_up = true;
+
+        // Disable raw mode first (tcsetattr syscall — synchronous, takes effect immediately).
+        let _ = crossterm::terminal::disable_raw_mode();
+
+        // Send ANSI sequences: leave alternate screen, show cursor, disable mouse capture.
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            cursor::Show,
+            DisableMouseCapture,
+        );
+
+        // Flush all pending output.
+        let _ = std::io::Write::flush(&mut io::stdout());
+    }
+
     /// Show a flash message in the status bar (auto-dismisses).
     pub(crate) fn flash(&mut self, msg: crate::widgets::status_bar::FlashMessage) {
         self.flash_message = Some(msg);
@@ -216,6 +248,11 @@ impl App {
             active_picker: None,
             profile_manager: None,
             login_dialog: None,
+            status_dialog: None,
+            info_dialog: None,
+            active_profile_name: claude_core::auth::profiles::get_active_profile()
+                .map(|p| p.display_name()),
+            cleaned_up: false,
         })
     }
 
@@ -293,8 +330,7 @@ impl App {
             }
         }
 
-        execute!(io::stdout(), DisableMouseCapture, cursor::Show)?;
-        ratatui::try_restore()?;
+        self.cleanup();
         Ok(())
     }
 
@@ -310,9 +346,12 @@ impl App {
 
         let (tx, mut rx) = mpsc::channel::<AppEvent>(256);
 
-        // Spawn input reader
+        // Spawn input reader — keep handle so we can abort it on exit.
+        // event::poll() is a blocking syscall; without abort() the tokio runtime
+        // would wait up to the poll timeout before the process could exit, which
+        // causes the shell prompt to not appear until the user presses Enter.
         let tx_input = tx.clone();
-        tokio::spawn(async move {
+        let input_task = tokio::spawn(async move {
             loop {
                 if event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(evt) = event::read() {
@@ -334,7 +373,7 @@ impl App {
 
         // Spawn render tick (60fps)
         let tx_tick = tx.clone();
-        tokio::spawn(async move {
+        let tick_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(16));
             loop {
                 interval.tick().await;
@@ -346,7 +385,7 @@ impl App {
 
         // Spawn spinner tick (50ms)
         let tx_spinner = tx.clone();
-        tokio::spawn(async move {
+        let spinner_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(SPINNER_TICK_MS));
             loop {
                 interval.tick().await;
@@ -499,6 +538,8 @@ impl App {
                                         let display = claude_core::auth::profiles::get_active_profile()
                                             .map(|p| p.display_name())
                                             .unwrap_or_else(|| name.clone());
+                                        // Refresh status bar profile name
+                                        self.active_profile_name = Some(display.clone());
                                         self.flash_success(format!("Switched to {}", display));
                                         self.message_list.push(MessageEntry::System {
                                             text: format!("Switched to profile: {}", display),
@@ -574,12 +615,13 @@ impl App {
                                                 tracing::warn!("Failed to store tokens to legacy location: {}", e);
                                             }
 
-                                            // Extract email and subscription info
-                                            let email = extract_email_from_oauth_tokens(&result.tokens);
+                                            // Use email + subscription_type fetched from /api/oauth/profile
+                                            let email = result.email
+                                                .unwrap_or_else(|| "unknown".to_string());
                                             let sub_type = result
-                                                .tokens
                                                 .subscription_type
                                                 .as_deref()
+                                                .or(result.tokens.subscription_type.as_deref())
                                                 .unwrap_or("pro");
 
                                             // Save as a profile and set as active
@@ -1517,6 +1559,35 @@ impl App {
                                         crate::widgets::login_dialog::LoginDialog::new(),
                                     );
                                 }
+                                CommandResult::OpenStatusDialog => {
+                                    use crate::widgets::status_dialog::{StatusDialog, StatusDialogContext};
+                                    let status_ctx = StatusDialogContext {
+                                        model: cmd_ctx.model.clone(),
+                                        session_id: cmd_ctx.session_id.clone(),
+                                        input_tokens: cmd_ctx.input_tokens,
+                                        output_tokens: cmd_ctx.output_tokens,
+                                        cache_read_tokens: cmd_ctx.cache_read_input_tokens,
+                                        cache_write_tokens: cmd_ctx.cache_creation_input_tokens,
+                                        total_cost: cmd_ctx.total_cost,
+                                        turn_count: cmd_ctx.turn_count,
+                                        session_duration_ms: cmd_ctx.session_duration_ms,
+                                        api_duration_ms: cmd_ctx.api_duration_ms,
+                                        tool_duration_ms: cmd_ctx.tool_duration_ms,
+                                        lines_added: cmd_ctx.lines_added,
+                                        lines_removed: cmd_ctx.lines_removed,
+                                        vim_mode: cmd_ctx.vim_mode,
+                                        plan_mode: cmd_ctx.plan_mode,
+                                        fast_mode: cmd_ctx.fast_mode,
+                                        brief_mode: cmd_ctx.brief_mode,
+                                        model_usage: cmd_ctx.model_usage.clone(),
+                                        cwd: cmd_ctx.cwd.clone(),
+                                    };
+                                    self.status_dialog = Some(StatusDialog::new(&status_ctx));
+                                }
+                                CommandResult::OpenInfoDialog { title, content } => {
+                                    use crate::widgets::info_dialog::InfoDialog;
+                                    self.info_dialog = Some(InfoDialog::new(title, content));
+                                }
                                 CommandResult::OpenPicker(picker_name) => {
                                     use crate::widgets::picker::{
                                         ActivePicker, build_model_picker,
@@ -1830,7 +1901,12 @@ impl App {
                 AppEvent::LoginOAuthResult(result) => {
                     if let Some(ref mut dialog) = self.login_dialog {
                         match result {
-                            Ok(msg) => dialog.set_success(msg),
+                            Ok(msg) => {
+                                dialog.set_success(msg);
+                                // Refresh active profile in status bar
+                                self.active_profile_name = claude_core::auth::profiles::get_active_profile()
+                                    .map(|p| p.display_name());
+                            }
                             Err(msg) => dialog.set_error(msg),
                         }
                     }
@@ -1838,7 +1914,12 @@ impl App {
                 AppEvent::LoginApiKeyResult(result) => {
                     if let Some(ref mut dialog) = self.login_dialog {
                         match result {
-                            Ok(msg) => dialog.set_success(msg),
+                            Ok(msg) => {
+                                dialog.set_success(msg);
+                                // Refresh active profile in status bar
+                                self.active_profile_name = claude_core::auth::profiles::get_active_profile()
+                                    .map(|p| p.display_name());
+                            }
                             Err(msg) => dialog.set_error(msg),
                         }
                     }
@@ -1846,42 +1927,35 @@ impl App {
             }
         }
 
-        // Cleanup: disable mouse/cursor first, then let ratatui handle raw mode + alternate screen
-        execute!(io::stdout(), DisableMouseCapture, cursor::Show)?;
-        ratatui::try_restore()?;
-        Ok(())
+        // Abort the three long-running infrastructure tasks.
+        input_task.abort();
+        tick_task.abort();
+        spinner_task.abort();
+
+        // Restore terminal state synchronously.
+        self.cleanup();
+
+        // Exit immediately instead of returning through the tokio runtime shutdown.
+        //
+        // If we just return Ok(()), tokio's runtime teardown runs: it drops tasks,
+        // joins threads, and flushes async I/O — all of which can take tens to
+        // hundreds of milliseconds.  During that window the process is still alive,
+        // and some shells (zsh in particular) won't print their prompt until the
+        // child process has fully exited.  That is why users had to press Enter.
+        //
+        // std::process::exit() terminates the process immediately after the OS has
+        // seen the terminal-restore writes above, so the shell prompt appears right
+        // away.  The Drop impl's cleanup() call becomes a no-op because cleaned_up
+        // is already true.
+        std::process::exit(0);
     }
 }
 
 impl Drop for App {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), DisableMouseCapture, cursor::Show);
-        ratatui::restore();
+        // cleanup() is idempotent — safe to call even if run/run_with_engine already called it.
+        // This ensures the terminal is always restored on panic or early return.
+        self.cleanup();
     }
 }
 
-/// Extract email from OAuth token claims or fall back to a default.
-fn extract_email_from_oauth_tokens(tokens: &claude_core::auth::storage::OAuthStoredTokens) -> String {
-    // Try to decode the access token JWT to get the email claim.
-    // JWT format: header.payload.signature (base64url encoded)
-    if let Some(email) = decode_jwt_email_claim(&tokens.access_token) {
-        return email;
-    }
-    "user@anthropic".to_string()
-}
-
-/// Attempt to decode email from a JWT access token (without verification).
-fn decode_jwt_email_claim(token: &str) -> Option<String> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
-    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
-    claims
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}

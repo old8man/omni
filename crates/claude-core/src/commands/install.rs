@@ -276,6 +276,9 @@ impl Command for InstallCommand {
             );
         }
 
-        CommandResult::Output(output)
+        CommandResult::OpenInfoDialog {
+            title: "Setup".to_string(),
+            content: output,
+        }
     }
 }

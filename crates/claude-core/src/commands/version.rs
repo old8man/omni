@@ -33,6 +33,9 @@ impl Command for VersionCommand {
 
         lines.push(format!("Platform: {} {}", std::env::consts::OS, std::env::consts::ARCH));
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "About OMNI".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

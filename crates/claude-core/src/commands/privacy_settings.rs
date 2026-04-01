@@ -49,7 +49,10 @@ impl Command for PrivacySettingsCommand {
         lines.push("  - Review data retention policies".to_string());
         lines.push("  - Manage conversation history settings".to_string());
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Privacy Settings".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }
 

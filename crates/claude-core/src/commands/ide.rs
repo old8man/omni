@@ -73,7 +73,10 @@ impl Command for IdeCommand {
             lines.push("Use /ide open to open a file in your connected IDE.".to_string());
         }
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "IDE Integration".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }
 

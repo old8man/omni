@@ -56,6 +56,9 @@ impl Command for UsageCommand {
             }
         }
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Token Usage".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

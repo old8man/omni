@@ -46,7 +46,10 @@ impl Command for RemoteSetupCommand {
                  \x20 gh auth login\n\
                  \x20 /web-setup",
             );
-            return CommandResult::Output(output);
+            return CommandResult::OpenInfoDialog {
+                title: "Web Setup".to_string(),
+                content: output,
+            };
         }
 
         // Check if gh is authenticated
@@ -66,7 +69,10 @@ impl Command for RemoteSetupCommand {
                  \x20 gh auth login\n\n\
                  Then run /web-setup again.",
             );
-            return CommandResult::Output(output);
+            return CommandResult::OpenInfoDialog {
+                title: "Web Setup".to_string(),
+                content: output,
+            };
         }
 
         // Get the GitHub auth token
@@ -114,6 +120,9 @@ impl Command for RemoteSetupCommand {
             }
         }
 
-        CommandResult::Output(output)
+        CommandResult::OpenInfoDialog {
+            title: "Web Setup".to_string(),
+            content: output,
+        }
     }
 }

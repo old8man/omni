@@ -535,24 +535,24 @@ impl PromptInput {
         }
 
         match (key.modifiers, key.code) {
+            // ---- New line (Shift+Enter) ----
+            (KeyModifiers::SHIFT, KeyCode::Enter) => {
+                self.insert_newline();
+                InputAction::None
+            }
+
             // ---- Submit shortcuts ----
             (KeyModifiers::CONTROL, KeyCode::Enter) if !self.is_empty() => {
-                InputAction::Submit(self.submit())
-            }
-            (KeyModifiers::SHIFT, KeyCode::Enter) if !self.is_empty() => {
                 InputAction::Submit(self.submit())
             }
             (KeyModifiers::ALT, KeyCode::Enter) if !self.is_empty() => {
                 InputAction::Submit(self.submit())
             }
             (_, KeyCode::Enter) if key.modifiers.is_empty() => {
-                if self.lines.len() == 1 && !self.is_empty() {
-                    InputAction::Submit(self.submit())
-                } else if self.is_empty() {
+                if self.is_empty() {
                     InputAction::None
                 } else {
-                    self.insert_newline();
-                    InputAction::None
+                    InputAction::Submit(self.submit())
                 }
             }
 

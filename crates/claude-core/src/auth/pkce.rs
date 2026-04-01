@@ -38,12 +38,73 @@ struct TokenExchangeResponse {
     scope: Option<String>,
 }
 
+/// Response from `GET /api/oauth/profile`.
+#[derive(Debug, serde::Deserialize)]
+struct OAuthProfileResponse {
+    account: Option<OAuthProfileAccount>,
+    organization: Option<OAuthProfileOrg>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OAuthProfileAccount {
+    email: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OAuthProfileOrg {
+    organization_type: Option<String>,
+}
+
+/// Fetch account profile info using the access token.
+/// Calls `GET https://api.anthropic.com/api/oauth/profile`.
+pub async fn fetch_oauth_profile(
+    access_token: &str,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.anthropic.com/api/oauth/profile")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to fetch OAuth profile")?;
+
+    if !resp.status().is_success() {
+        return Ok((None, None)); // non-fatal — caller can fallback
+    }
+
+    let profile: OAuthProfileResponse = resp
+        .json()
+        .await
+        .context("Failed to parse OAuth profile")?;
+
+    let email = profile.account.as_ref().and_then(|a| a.email.clone());
+
+    // Map organization_type → subscription label
+    let sub_type = profile.organization.as_ref().and_then(|o| {
+        o.organization_type.as_deref().map(|t| match t {
+            "claude_max" => "max".to_string(),
+            "claude_pro" => "pro".to_string(),
+            "claude_enterprise" => "enterprise".to_string(),
+            "claude_team" => "team".to_string(),
+            other => other.to_string(),
+        })
+    });
+
+    Ok((email, sub_type))
+}
+
 /// Result of a successful OAuth login.
 #[derive(Debug, Clone)]
 pub struct OAuthLoginResult {
     pub tokens: OAuthStoredTokens,
     /// The manual fallback URL (for display in TUI when browser doesn't open).
     pub manual_url: String,
+    /// User's email address from the OAuth profile endpoint.
+    pub email: Option<String>,
+    /// Subscription type from the OAuth profile: "pro", "max", "team", "enterprise".
+    pub subscription_type: Option<String>,
 }
 
 /// Prepared OAuth flow — URL is available immediately, completion is awaited separately.
@@ -105,9 +166,15 @@ pub async fn prepare_oauth_login(login_with_claude_ai: bool) -> Result<PreparedO
         )
         .await?;
 
+        // Fetch real email and subscription type from /api/oauth/profile
+        let (email, subscription_type) =
+            fetch_oauth_profile(&tokens.access_token).await.unwrap_or((None, None));
+
         Ok(OAuthLoginResult {
             tokens,
             manual_url: manual_url_clone,
+            email,
+            subscription_type,
         })
     });
 

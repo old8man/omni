@@ -42,6 +42,9 @@ impl Command for HooksCommand {
         );
         lines.push("Use /update-config to add or modify hooks.".to_string());
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Hooks".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

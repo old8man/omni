@@ -51,6 +51,9 @@ impl Command for ContextCommand {
             format!("  Output tokens: {}", ctx.output_tokens),
             format!("  Total:         {} / {}", total, limit),
         ];
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Context Window".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }

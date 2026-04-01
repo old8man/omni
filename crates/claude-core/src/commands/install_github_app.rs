@@ -28,9 +28,10 @@ impl Command for InstallGithubAppCommand {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
         {
-            return CommandResult::Output(
-                "The install-github-app command is currently disabled.".to_string(),
-            );
+            return CommandResult::OpenInfoDialog {
+                title: "GitHub Actions Setup".to_string(),
+                content: "The install-github-app command is currently disabled.".to_string(),
+            };
         }
 
         // Detect current repo using gh CLI
@@ -74,7 +75,10 @@ impl Command for InstallGithubAppCommand {
             }
         }
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "GitHub Actions Setup".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }
 

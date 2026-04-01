@@ -172,6 +172,13 @@ pub enum CommandResult {
     OpenProfileManager,
     /// Open the login dialog overlay for authentication.
     OpenLoginDialog,
+    /// Open the full status dialog overlay.
+    OpenStatusDialog,
+    /// Open a generic scrollable info dialog with the given title and content.
+    OpenInfoDialog {
+        title: String,
+        content: String,
+    },
 }
 
 /// Trait implemented by every slash command.

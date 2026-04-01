@@ -194,6 +194,9 @@ impl Command for InsightsCommand {
             }
         }
 
-        CommandResult::Output(output)
+        CommandResult::OpenInfoDialog {
+            title: "Session Insights".to_string(),
+            content: output,
+        }
     }
 }

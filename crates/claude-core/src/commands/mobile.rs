@@ -40,6 +40,9 @@ impl Command for MobileCommand {
             "Scan the QR codes above or visit the links to download.".to_string(),
         ];
 
-        CommandResult::Output(lines.join("\n"))
+        CommandResult::OpenInfoDialog {
+            title: "Claude Mobile App".to_string(),
+            content: lines.join("\n"),
+        }
     }
 }
