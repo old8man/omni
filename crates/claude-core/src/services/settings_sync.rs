@@ -67,6 +67,7 @@ pub struct UserSyncData {
 
 /// Result from fetching user settings.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct SettingsSyncFetchResult {
     pub success: bool,
     pub data: Option<UserSyncData>,
@@ -77,20 +78,10 @@ pub struct SettingsSyncFetchResult {
     pub skip_retry: bool,
 }
 
-impl Default for SettingsSyncFetchResult {
-    fn default() -> Self {
-        Self {
-            success: false,
-            data: None,
-            is_empty: false,
-            error: None,
-            skip_retry: false,
-        }
-    }
-}
 
 /// Result from uploading user settings.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct SettingsSyncUploadResult {
     pub success: bool,
     pub checksum: Option<String>,
@@ -98,16 +89,6 @@ pub struct SettingsSyncUploadResult {
     pub error: Option<String>,
 }
 
-impl Default for SettingsSyncUploadResult {
-    fn default() -> Self {
-        Self {
-            success: false,
-            checksum: None,
-            last_modified: None,
-            error: None,
-        }
-    }
-}
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -232,13 +213,13 @@ pub async fn build_entries_from_local_files(
 }
 
 /// Compute which entries have changed compared to remote.
-pub fn compute_changed_entries<'a>(
-    local: &'a HashMap<String, String>,
+pub fn compute_changed_entries(
+    local: &HashMap<String, String>,
     remote: &HashMap<String, String>,
 ) -> HashMap<String, String> {
     local
         .iter()
-        .filter(|(key, value)| remote.get(*key).map_or(true, |rv| rv != *value))
+        .filter(|(key, value)| remote.get(*key) != Some(*value))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
@@ -275,23 +256,21 @@ pub async fn apply_remote_entries_to_local(
     // Apply global user settings
     if let Some(content) = entries.get(SyncKeys::USER_SETTINGS) {
         if let Some(path) = user_settings_path {
-            if !exceeds_size_limit(content) {
-                if write_file_for_sync(path, content).await? {
+            if !exceeds_size_limit(content)
+                && write_file_for_sync(path, content).await? {
                     result.applied_count += 1;
                     result.settings_written = true;
                 }
-            }
         }
     }
 
     // Apply global user memory
     if let Some(content) = entries.get(SyncKeys::USER_MEMORY) {
-        if !exceeds_size_limit(content) {
-            if write_file_for_sync(user_memory_path, content).await? {
+        if !exceeds_size_limit(content)
+            && write_file_for_sync(user_memory_path, content).await? {
                 result.applied_count += 1;
                 result.memory_written = true;
             }
-        }
     }
 
     // Apply project-specific files
@@ -299,24 +278,22 @@ pub async fn apply_remote_entries_to_local(
         let proj_settings_key = SyncKeys::project_settings(pid);
         if let Some(content) = entries.get(&proj_settings_key) {
             if let Some(path) = local_settings_path {
-                if !exceeds_size_limit(content) {
-                    if write_file_for_sync(path, content).await? {
+                if !exceeds_size_limit(content)
+                    && write_file_for_sync(path, content).await? {
                         result.applied_count += 1;
                         result.settings_written = true;
                     }
-                }
             }
         }
 
         let proj_memory_key = SyncKeys::project_memory(pid);
         if let Some(content) = entries.get(&proj_memory_key) {
             if let Some(path) = local_memory_path {
-                if !exceeds_size_limit(content) {
-                    if write_file_for_sync(path, content).await? {
+                if !exceeds_size_limit(content)
+                    && write_file_for_sync(path, content).await? {
                         result.applied_count += 1;
                         result.memory_written = true;
                     }
-                }
             }
         }
     }
@@ -368,6 +345,23 @@ where
     }
 
     last_result
+}
+
+/// Create a reqwest client configured with the settings sync timeout.
+pub fn create_sync_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(SETTINGS_SYNC_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+}
+
+/// Convenience: fetch with the default retry count.
+pub async fn fetch_with_default_retries<F, Fut>(fetch_fn: F) -> SettingsSyncFetchResult
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = SettingsSyncFetchResult>,
+{
+    fetch_with_retries(DEFAULT_MAX_RETRIES, fetch_fn).await
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

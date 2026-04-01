@@ -462,7 +462,7 @@ impl<'a> Widget for MessageListWidget<'a> {
                     let is_last = msg_idx + 1 == self.list.messages.len();
                     if is_last && self.list.streaming {
                         // Blinking cursor effect: use spinner frame to alternate
-                        let cursor_char = if self.list.spinner_frame % 2 == 0 {
+                        let cursor_char = if self.list.spinner_frame.is_multiple_of(2) {
                             "█"
                         } else {
                             " "

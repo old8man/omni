@@ -36,7 +36,7 @@ use crate::widgets::message_list::{
 };
 use crate::widgets::notification::{NotificationManager, NotificationWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
-use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
+use crate::widgets::prompt_input::{PromptInput, PromptInputWidget};
 use crate::widgets::search_overlay::{SearchAction, SearchOverlay, SearchOverlayWidget};
 use crate::widgets::spinner::{SpinnerMode, SpinnerState, SPINNER_TICK_MS};
 use crate::widgets::status_bar::{StatusBarState, StatusBarWidget};
@@ -1306,7 +1306,7 @@ impl App {
             None
         };
         // Compute dynamic input area height based on line count
-        let input_area_height = (self.prompt.line_count().max(1).min(10) as u16) + 1;
+        let _input_area_height = (self.prompt.line_count() as u16).clamp(1, 10) + 1;
         // Prune expired notifications before rendering
         self.notifications.prune();
 
@@ -1412,6 +1412,20 @@ impl App {
                 input_widget = input_widget.vim_mode(mode_str);
             }
             frame.render_widget(input_widget, layout.input);
+
+            // Set cursor position in the input area so it's visible
+            if permission_dialog.is_none() && !search_overlay.active {
+                let cursor_pos = prompt.cursor_pos();
+                let prompt_prefix_len: u16 = 2; // "> "
+                let cursor_x = layout.input.x + prompt_prefix_len + cursor_pos.col as u16;
+                // +1 for the top border of the input block
+                let cursor_y = layout.input.y + 1 + cursor_pos.row as u16;
+                if cursor_x < layout.input.x + layout.input.width
+                    && cursor_y < layout.input.y + layout.input.height
+                {
+                    frame.set_cursor_position(ratatui::layout::Position::new(cursor_x, cursor_y));
+                }
+            }
 
             // Status bar (full-featured, bottom of screen)
             let status_state = StatusBarState {

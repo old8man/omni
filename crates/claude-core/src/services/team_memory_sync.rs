@@ -468,7 +468,7 @@ fn rule_id_to_label(rule_id: &str) -> String {
             special
                 .get(part)
                 .copied()
-                .unwrap_or_else(|| {
+                .unwrap_or({
                     // Title-case fallback — return owned string via leak-free approach
                     // We'll just return the part since we map to &str
                     part
@@ -600,11 +600,75 @@ pub fn is_permanent_failure(result: &TeamMemorySyncPushResult) -> bool {
         return true;
     }
     if let Some(status) = result.http_status {
-        if status >= 400 && status < 500 && status != 409 && status != 429 {
+        if (400..500).contains(&status) && status != 409 && status != 429 {
             return true;
         }
     }
     false
+}
+
+/// Create a reqwest client configured with the team memory sync timeout.
+pub fn create_team_sync_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(TEAM_MEMORY_SYNC_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+}
+
+/// Validate that a memory entry does not exceed the PUT body size limit.
+pub fn validate_put_body_size(body: &[u8]) -> Result<()> {
+    if body.len() > MAX_PUT_BODY_BYTES {
+        anyhow::bail!(
+            "Team memory entry exceeds maximum PUT body size ({} > {} bytes)",
+            body.len(),
+            MAX_PUT_BODY_BYTES
+        );
+    }
+    Ok(())
+}
+
+/// Execute a team memory operation with retry logic.
+pub async fn with_retries<F, Fut, T>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = None;
+    for attempt in 0..=MAX_RETRIES {
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < MAX_RETRIES {
+                    let delay = Duration::from_millis(500 * 2u64.pow(attempt));
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("max retries exceeded")))
+}
+
+/// Execute a team memory push with conflict retry logic.
+pub async fn with_conflict_retries<F, Fut, T>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = None;
+    for attempt in 0..=MAX_CONFLICT_RETRIES {
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < MAX_CONFLICT_RETRIES {
+                    let delay = DEBOUNCE;
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("max conflict retries exceeded")))
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

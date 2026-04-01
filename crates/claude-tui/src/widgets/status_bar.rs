@@ -274,8 +274,6 @@ fn format_cost(cost: f64) -> String {
         format!("${:.4}", cost)
     } else if cost < 0.01 {
         format!("${:.3}", cost)
-    } else if cost < 1.0 {
-        format!("${:.2}", cost)
     } else if cost < 100.0 {
         format!("${:.2}", cost)
     } else {

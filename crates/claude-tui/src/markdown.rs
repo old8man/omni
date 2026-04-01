@@ -136,7 +136,7 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             };
             let mut spans = vec![
                 Span::styled(
-                    format!("{}", indent),
+                    indent.to_string(),
                     Style::default(),
                 ),
                 Span::styled(

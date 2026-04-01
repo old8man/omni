@@ -331,8 +331,29 @@ impl PromptInput {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
                 self.insert_char(c);
-                // Dismiss completion on any non-tab typing
-                self.completion = None;
+                // Auto-trigger slash command completion when typing '/' at start of line
+                let current_line = &self.lines[self.cursor.row];
+                let before_cursor = &current_line[..self.cursor.col];
+                if before_cursor.starts_with('/') && self.cursor.row == 0 {
+                    // Refresh slash command suggestions as user types
+                    let query = before_cursor;
+                    let items: Vec<CompletionItem> = SLASH_COMMANDS
+                        .iter()
+                        .filter(|(cmd, _)| cmd.starts_with(query))
+                        .map(|(cmd, desc)| CompletionItem {
+                            label: cmd.to_string(),
+                            insert: cmd.to_string(),
+                            description: Some(desc.to_string()),
+                        })
+                        .collect();
+                    if !items.is_empty() {
+                        self.completion = Some(CompletionState::new(items, 0));
+                    } else {
+                        self.completion = None;
+                    }
+                } else {
+                    self.completion = None;
+                }
                 InputAction::None
             }
 
@@ -380,12 +401,14 @@ impl PromptInput {
                 InputAction::None
             }
 
-            // ---- Alt+Left/Right: word navigation ----
-            (KeyModifiers::ALT, KeyCode::Left) => {
+            // ---- Word navigation: Alt+Left/Right and Ctrl+Left/Right ----
+            (KeyModifiers::ALT, KeyCode::Left)
+            | (KeyModifiers::CONTROL, KeyCode::Left) => {
                 self.move_word_left();
                 InputAction::None
             }
-            (KeyModifiers::ALT, KeyCode::Right) => {
+            (KeyModifiers::ALT, KeyCode::Right)
+            | (KeyModifiers::CONTROL, KeyCode::Right) => {
                 self.move_word_right();
                 InputAction::None
             }
@@ -568,7 +591,7 @@ impl PromptInput {
         let mut pos = 0;
         let mut chars = after.chars();
         // Skip non-whitespace
-        while let Some(c) = chars.next() {
+        for c in chars.by_ref() {
             if c.is_whitespace() {
                 break;
             }
@@ -761,6 +784,50 @@ impl PromptInput {
     // -----------------------------------------------------------------------
 
     /// Trigger tab completion or cycle through existing completions.
+    /// Handle a key while the completion popup is visible.
+    /// Returns `Some(action)` if consumed, `None` to pass through.
+    fn handle_completion_key(&mut self, key: &KeyEvent) -> Option<InputAction> {
+        match key.code {
+            KeyCode::Tab => {
+                if let Some(ref mut state) = self.completion {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        state.prev();
+                    } else {
+                        state.next();
+                    }
+                }
+                Some(InputAction::None)
+            }
+            KeyCode::Enter => {
+                self.accept_completion();
+                // If the accepted text is a complete slash command, submit it
+                let text = self.text();
+                if text.starts_with('/') && SLASH_COMMANDS.iter().any(|(cmd, _)| *cmd == text) {
+                    Some(InputAction::Submit(self.submit()))
+                } else {
+                    Some(InputAction::None)
+                }
+            }
+            KeyCode::Esc => {
+                self.completion = None;
+                Some(InputAction::None)
+            }
+            KeyCode::Up => {
+                if let Some(ref mut state) = self.completion {
+                    state.prev();
+                }
+                Some(InputAction::None)
+            }
+            KeyCode::Down => {
+                if let Some(ref mut state) = self.completion {
+                    state.next();
+                }
+                Some(InputAction::None)
+            }
+            _ => None, // pass through to normal handling
+        }
+    }
+
     fn trigger_or_cycle_completion(&mut self, backward: bool) {
         if let Some(ref mut state) = self.completion {
             // Already showing completions — cycle
@@ -827,21 +894,7 @@ impl PromptInput {
         }
     }
 
-    /// Handle key events when completion popup is visible.
-    /// Returns `Some(InputAction)` if the key was consumed by completion.
-    fn handle_completion_key(&mut self, key: &KeyEvent) -> Option<InputAction> {
-        match key.code {
-            KeyCode::Esc => {
-                self.completion = None;
-                Some(InputAction::None)
-            }
-            KeyCode::Enter => {
-                self.accept_completion();
-                Some(InputAction::None)
-            }
-            _ => None, // Let the main handler process it
-        }
-    }
+    // NOTE: handle_completion_key is defined above (near trigger_or_cycle_completion)
 
     /// Attempt file path completion for a given token.
     fn complete_file_path(&self, token: &str, _token_start: usize) -> Vec<CompletionItem> {
@@ -1047,7 +1100,7 @@ impl<'a> Widget for PromptInputWidget<'a> {
         }
 
         // ----- Vim mode indicator -----
-        let mode_width = if let Some(mode) = self.vim_mode {
+        let _mode_width = if let Some(mode) = self.vim_mode {
             let mode_str = format!("-- {} -- ", mode);
             let mode_span = Span::styled(
                 &mode_str,
