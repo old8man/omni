@@ -1469,6 +1469,8 @@ impl App {
             MouseAction::Release { col, row } => {
                 self.selection.extend_to(col, row);
                 self.selection.finalize();
+                // Selection is now visible (highlighted in next render).
+                // User can copy with Ctrl+C / Cmd+C.
             }
             MouseAction::RightClick { col, row } => {
                 // Right-click: position cursor at click
@@ -1503,6 +1505,7 @@ impl App {
         let search_overlay = &self.search_overlay;
         let notifications = &self.notifications;
         let input_handler = &self.input_handler;
+        let selection = &self.selection;
         let show_welcome = message_list.is_empty() && !spinner.active;
         // Read live state from AppStateStore (non-blocking try_read to avoid
         // stalling the 60fps render loop if the engine holds a write lock).
@@ -1584,6 +1587,39 @@ impl App {
             } else {
                 let msg_widget = MessageListWidget::new(message_list);
                 frame.render_widget(msg_widget, layout.messages);
+
+                // Apply selection highlighting over the message area
+                if selection.has_selection() {
+                    let ((sc, sr), (ec, er)) = selection.normalized();
+                    let msg_area = layout.messages;
+                    for row in sr..=er {
+                        if row < msg_area.y || row >= msg_area.y + msg_area.height {
+                            continue;
+                        }
+                        let col_start = if row == sr { sc } else { msg_area.x };
+                        let col_end = if row == er { ec } else { msg_area.x + msg_area.width - 1 };
+                        for col in col_start..=col_end {
+                            if col >= msg_area.x + msg_area.width {
+                                break;
+                            }
+                            if let Some(cell) = frame.buffer_mut().cell_mut(ratatui::layout::Position::new(col, row)) {
+                                // Invert foreground/background for selection highlight
+                                let fg = cell.fg;
+                                let bg = cell.bg;
+                                cell.fg = if bg == ratatui::style::Color::Reset {
+                                    ratatui::style::Color::Black
+                                } else {
+                                    bg
+                                };
+                                cell.bg = if fg == ratatui::style::Color::Reset {
+                                    ratatui::style::Color::White
+                                } else {
+                                    fg
+                                };
+                            }
+                        }
+                    }
+                }
             }
 
             // Spinner
