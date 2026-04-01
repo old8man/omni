@@ -170,6 +170,8 @@ pub enum CommandResult {
     OpenPicker(String),
     /// Open the interactive profile manager overlay.
     OpenProfileManager,
+    /// Open the login dialog overlay for authentication.
+    OpenLoginDialog,
 }
 
 /// Trait implemented by every slash command.

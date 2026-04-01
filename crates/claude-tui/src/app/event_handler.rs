@@ -13,6 +13,24 @@ use super::App;
 
 impl App {
     pub(crate) fn handle_key_standalone(&mut self, key: KeyEvent) {
+        // Login dialog overlay intercepts all keys when open.
+        if self.login_dialog.is_some() {
+            use crate::widgets::login_dialog::LoginDialogAction;
+            let action = self.login_dialog.as_mut().unwrap().handle_key(key.code);
+            match action {
+                LoginDialogAction::Consumed => {}
+                LoginDialogAction::Close => {
+                    self.login_dialog = None;
+                }
+                LoginDialogAction::StartOAuth | LoginDialogAction::SubmitApiKey(_) => {
+                    // In standalone mode without engine, these are no-ops.
+                    // The full login flow requires run_with_engine.
+                    self.login_dialog = None;
+                }
+            }
+            return;
+        }
+
         // Picker overlay intercepts all keys when open.
         if self.active_picker.is_some() {
             use crate::widgets::picker::PickerAction;

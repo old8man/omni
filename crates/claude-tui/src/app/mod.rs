@@ -55,6 +55,10 @@ pub enum AppEvent {
     ContinueTurn,
     /// Result of a background `engine.run_turn()` call.
     TurnComplete(Result<TurnResult, anyhow::Error>),
+    /// Result of a background OAuth login attempt.
+    LoginOAuthResult(Result<String, String>),
+    /// Result of an API key validation/save attempt.
+    LoginApiKeyResult(Result<String, String>),
 }
 
 /// Pending tool that needs permission before execution.
@@ -140,6 +144,8 @@ pub struct App {
     pub(crate) active_picker: Option<crate::widgets::picker::ActivePicker>,
     /// Profile manager overlay (opened via /profile).
     pub(crate) profile_manager: Option<crate::widgets::profile_manager::ProfileManager>,
+    /// Login dialog overlay (opened via /login).
+    pub(crate) login_dialog: Option<crate::widgets::login_dialog::LoginDialog>,
 }
 
 impl App {
@@ -207,6 +213,7 @@ impl App {
             config_panel: None,
             active_picker: None,
             profile_manager: None,
+            login_dialog: None,
         })
     }
 
@@ -410,6 +417,10 @@ impl App {
                 }
                 AppEvent::SpinnerTick => {
                     self.spinner.advance();
+                    // Also advance login dialog spinner
+                    if let Some(ref mut dialog) = self.login_dialog {
+                        dialog.tick();
+                    }
                 }
                 AppEvent::Mouse(mouse) => {
                     self.handle_mouse(mouse);
@@ -517,6 +528,138 @@ impl App {
                                 // If list is now empty, close the panel.
                                 if self.profile_manager.as_ref().map_or(true, |pm| pm.is_empty()) {
                                     self.profile_manager = None;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    // --- Login dialog overlay intercepts all keys ---
+                    if self.login_dialog.is_some() {
+                        use crate::widgets::login_dialog::LoginDialogAction;
+                        let action = self.login_dialog.as_mut().unwrap().handle_key(k.code);
+                        match action {
+                            LoginDialogAction::Consumed => {}
+                            LoginDialogAction::Close => {
+                                self.login_dialog = None;
+                            }
+                            LoginDialogAction::StartOAuth => {
+                                // Spawn async OAuth task
+                                let tx_login = tx.clone();
+                                tokio::spawn(async move {
+                                    match claude_core::auth::pkce::run_oauth_login(true).await {
+                                        Ok(result) => {
+                                            // Store tokens in the legacy location
+                                            if let Err(e) = claude_core::auth::storage::store_tokens(&result.tokens).await {
+                                                tracing::warn!("Failed to store tokens to legacy location: {}", e);
+                                            }
+
+                                            // Extract email and subscription info
+                                            let email = extract_email_from_oauth_tokens(&result.tokens);
+                                            let sub_type = result
+                                                .tokens
+                                                .subscription_type
+                                                .as_deref()
+                                                .unwrap_or("pro");
+
+                                            // Save as a profile and set as active
+                                            match claude_core::auth::profiles::save_oauth_as_profile(
+                                                &result.tokens,
+                                                &email,
+                                                sub_type,
+                                            ) {
+                                                Ok(profile) => {
+                                                    let msg = format!(
+                                                        "Profile: {}\nSet as active profile.",
+                                                        profile.display_name()
+                                                    );
+                                                    let _ = tx_login
+                                                        .send(AppEvent::LoginOAuthResult(Ok(msg)))
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx_login
+                                                        .send(AppEvent::LoginOAuthResult(Err(
+                                                            format!("Logged in but failed to save profile: {}", e),
+                                                        )))
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx_login
+                                                .send(AppEvent::LoginOAuthResult(Err(e.to_string())))
+                                                .await;
+                                        }
+                                    }
+                                });
+                            }
+                            LoginDialogAction::SubmitApiKey(key) => {
+                                // Validate key format
+                                if !key.starts_with("sk-ant-") && !key.starts_with("sk-") {
+                                    if let Some(ref mut dialog) = self.login_dialog {
+                                        dialog.set_error(
+                                            "Invalid key format. Key must start with sk-ant- or sk-"
+                                                .to_string(),
+                                        );
+                                    }
+                                } else {
+                                    // Build a profile name from the key
+                                    let key_suffix = if key.len() >= 8 {
+                                        &key[key.len() - 8..]
+                                    } else {
+                                        &key
+                                    };
+                                    let profile_name = format!("{}-api", key_suffix);
+                                    let now = chrono::Utc::now().to_rfc3339();
+
+                                    let profile = claude_core::auth::profiles::Profile {
+                                        name: profile_name.clone(),
+                                        email: format!("api-key-...{}", key_suffix),
+                                        subscription_type: "api".to_string(),
+                                        credentials: claude_core::auth::profiles::ProfileCredentials {
+                                            access_token: None,
+                                            refresh_token: None,
+                                            expires_at: None,
+                                            api_key: Some(key),
+                                            scopes: vec![],
+                                            account_uuid: None,
+                                            organization_name: None,
+                                        },
+                                        created_at: now,
+                                    };
+
+                                    match claude_core::auth::profiles::save_profile(&profile) {
+                                        Ok(()) => {
+                                            match claude_core::auth::profiles::set_active_profile(&profile_name) {
+                                                Ok(()) => {
+                                                    let msg = format!(
+                                                        "Profile: {} (API)\nSet as active profile.",
+                                                        profile_name
+                                                    );
+                                                    if let Some(ref mut dialog) = self.login_dialog {
+                                                        dialog.set_success(msg);
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    if let Some(ref mut dialog) = self.login_dialog {
+                                                        dialog.set_error(format!(
+                                                            "Saved profile but failed to set as active: {}",
+                                                            e
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            if let Some(ref mut dialog) = self.login_dialog {
+                                                dialog.set_error(format!(
+                                                    "Failed to save profile: {}",
+                                                    e
+                                                ));
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1349,6 +1492,11 @@ impl App {
                                         crate::widgets::profile_manager::ProfileManager::new(),
                                     );
                                 }
+                                CommandResult::OpenLoginDialog => {
+                                    self.login_dialog = Some(
+                                        crate::widgets::login_dialog::LoginDialog::new(),
+                                    );
+                                }
                                 CommandResult::OpenPicker(picker_name) => {
                                     use crate::widgets::picker::{
                                         ActivePicker, build_model_picker,
@@ -1653,6 +1801,22 @@ impl App {
                         }
                     }
                 }
+                AppEvent::LoginOAuthResult(result) => {
+                    if let Some(ref mut dialog) = self.login_dialog {
+                        match result {
+                            Ok(msg) => dialog.set_success(msg),
+                            Err(msg) => dialog.set_error(msg),
+                        }
+                    }
+                }
+                AppEvent::LoginApiKeyResult(result) => {
+                    if let Some(ref mut dialog) = self.login_dialog {
+                        match result {
+                            Ok(msg) => dialog.set_success(msg),
+                            Err(msg) => dialog.set_error(msg),
+                        }
+                    }
+                }
             }
         }
 
@@ -1668,4 +1832,30 @@ impl Drop for App {
         let _ = execute!(io::stdout(), DisableMouseCapture, cursor::Show);
         ratatui::restore();
     }
+}
+
+/// Extract email from OAuth token claims or fall back to a default.
+fn extract_email_from_oauth_tokens(tokens: &claude_core::auth::storage::OAuthStoredTokens) -> String {
+    // Try to decode the access token JWT to get the email claim.
+    // JWT format: header.payload.signature (base64url encoded)
+    if let Some(email) = decode_jwt_email_claim(&tokens.access_token) {
+        return email;
+    }
+    "user@anthropic".to_string()
+}
+
+/// Attempt to decode email from a JWT access token (without verification).
+fn decode_jwt_email_claim(token: &str) -> Option<String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    claims
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }

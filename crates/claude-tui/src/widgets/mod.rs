@@ -2,6 +2,7 @@ pub mod agent_status;
 pub mod config_panel;
 pub mod context_panel;
 pub mod diff_view;
+pub mod login_dialog;
 pub mod message_list;
 pub mod notification;
 pub mod permission_dialog;

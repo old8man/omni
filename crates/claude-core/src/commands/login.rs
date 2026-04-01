@@ -25,80 +25,9 @@ impl Command for LoginCommand {
             );
         }
 
-        // Attempt OAuth login
-        match crate::auth::pkce::run_oauth_login(true).await {
-            Ok(result) => {
-                // Store tokens in the legacy location for backward compatibility
-                if let Err(e) = crate::auth::storage::store_tokens(&result.tokens).await {
-                    tracing::warn!("Failed to store tokens to legacy location: {}", e);
-                }
-
-                // Extract email and subscription info from the token response
-                let email = extract_email_from_tokens(&result.tokens);
-                let sub_type = result
-                    .tokens
-                    .subscription_type
-                    .as_deref()
-                    .unwrap_or("pro");
-
-                // Save as a profile and set as active
-                match crate::auth::profiles::save_oauth_as_profile(
-                    &result.tokens,
-                    &email,
-                    sub_type,
-                ) {
-                    Ok(profile) => CommandResult::Output(format!(
-                        "Logged in successfully!\n\n\
-                         Profile created: {}\n\
-                         Set as active profile.",
-                        profile.display_name()
-                    )),
-                    Err(e) => {
-                        tracing::warn!("Failed to save profile: {}", e);
-                        CommandResult::Output(
-                            "Logged in successfully (tokens saved).\n\n\
-                             Note: Failed to create profile entry. \
-                             Use /profile to manage profiles."
-                                .to_string(),
-                        )
-                    }
-                }
-            }
-            Err(e) => CommandResult::Output(format!(
-                "Login failed: {}\n\n\
-                 You can also set ANTHROPIC_API_KEY environment variable:\n\
-                 export ANTHROPIC_API_KEY=sk-ant-...",
-                e
-            )),
-        }
+        // Open the TUI login dialog instead of running OAuth directly
+        CommandResult::OpenLoginDialog
     }
-}
-
-/// Extract email from OAuth token claims or fall back to a default.
-fn extract_email_from_tokens(tokens: &crate::auth::storage::OAuthStoredTokens) -> String {
-    // Try to decode the access token JWT to get the email claim.
-    // JWT format: header.payload.signature (base64url encoded)
-    if let Some(email) = decode_jwt_email(&tokens.access_token) {
-        return email;
-    }
-    // Fall back to "unknown" if we can't extract from the token
-    "user@anthropic".to_string()
-}
-
-/// Attempt to decode email from a JWT access token (without verification).
-fn decode_jwt_email(token: &str) -> Option<String> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
-    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
-    claims
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
 }
 
 /// Log out / clear credentials.

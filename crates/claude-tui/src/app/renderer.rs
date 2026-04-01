@@ -423,6 +423,11 @@ impl App {
                 frame.render_widget(notif_widget, notif_area);
             }
 
+            // Login dialog overlay (drawn over everything)
+            if let Some(ref login) = self.login_dialog {
+                frame.render_widget(login, area);
+            }
+
             // Profile manager overlay (drawn over everything)
             if let Some(ref pm) = self.profile_manager {
                 let pm_height = area.height.saturating_sub(4).max(10);

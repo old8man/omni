@@ -11,6 +11,8 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+chrono.workspace = true
+base64 = "0.22"
 ratatui = "0.30"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio-util = { version = "0.7", features = ["rt"] }
