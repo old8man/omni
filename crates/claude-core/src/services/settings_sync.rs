@@ -7,13 +7,13 @@
 ///
 /// Port of `services/settingsSync/index.ts` and `services/settingsSync/types.ts`.
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 

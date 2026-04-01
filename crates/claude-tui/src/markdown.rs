@@ -126,6 +126,30 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             continue;
         }
 
+        // Task lists (- [ ] / - [x])
+        if let Some((indent_level, checked, rest)) = parse_task_list(line) {
+            let indent = "  ".repeat(indent_level);
+            let (checkbox, color) = if checked {
+                ("☑ ", Color::Green)
+            } else {
+                ("☐ ", Color::DarkGray)
+            };
+            let mut spans = vec![
+                Span::styled(
+                    format!("{}", indent),
+                    Style::default(),
+                ),
+                Span::styled(
+                    checkbox.to_string(),
+                    Style::default().fg(color),
+                ),
+            ];
+            spans.extend(render_inline_spans(rest));
+            lines.push(Line::from(spans));
+            i += 1;
+            continue;
+        }
+
         // Nested unordered list items
         if let Some((indent_level, rest)) = parse_unordered_list(line) {
             let indent = "  ".repeat(indent_level);
@@ -294,6 +318,21 @@ fn parse_unordered_list(line: &str) -> Option<(usize, &str)> {
         Some((leading_spaces / 2, rest))
     } else if let Some(rest) = trimmed.strip_prefix("+ ") {
         Some((leading_spaces / 2, rest))
+    } else {
+        None
+    }
+}
+
+/// Parse a task list item (`- [ ]` or `- [x]`), returning (indent level, checked, remaining text).
+fn parse_task_list(line: &str) -> Option<(usize, bool, &str)> {
+    let stripped = line.trim_end();
+    let leading_spaces = stripped.len() - stripped.trim_start().len();
+    let trimmed = stripped.trim_start();
+
+    if let Some(rest) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
+        Some((leading_spaces / 2, true, rest))
+    } else if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
+        Some((leading_spaces / 2, false, rest))
     } else {
         None
     }
@@ -915,6 +954,28 @@ mod tests {
     fn test_code_block_plain() {
         let lines = render_markdown("```\nplain code\n```");
         // separator, code line (green), separator
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_task_list_unchecked() {
+        let lines = render_markdown("- [ ] todo item");
+        assert_eq!(lines.len(), 1);
+        let has_checkbox = lines[0].spans.iter().any(|s| s.content.contains('☐'));
+        assert!(has_checkbox);
+    }
+
+    #[test]
+    fn test_task_list_checked() {
+        let lines = render_markdown("- [x] done item");
+        assert_eq!(lines.len(), 1);
+        let has_checkbox = lines[0].spans.iter().any(|s| s.content.contains('☑'));
+        assert!(has_checkbox);
+    }
+
+    #[test]
+    fn test_task_list_mixed() {
+        let lines = render_markdown("- [x] done\n- [ ] todo\n- [X] also done");
         assert_eq!(lines.len(), 3);
     }
 }

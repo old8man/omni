@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -168,7 +168,6 @@ pub async fn rollback_consolidation_lock(memory_dir: &Path, prior_mtime_ms: u64)
     // Reset mtime using filetime-like approach
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
         let secs = (prior_mtime_ms / 1000) as i64;
         let nsecs = ((prior_mtime_ms % 1000) * 1_000_000) as i64;
         let times = [

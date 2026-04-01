@@ -147,18 +147,16 @@ impl std::error::Error for AwaySummaryError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::message::{AssistantMessage, AssistantMessageInner, UserMessage, UserMessageInner};
+    use crate::types::message::{ApiMessage, AssistantMessage, Role, UserMessage};
+    use crate::types::usage::Usage;
     use uuid::Uuid;
 
     fn make_user_msg(text: &str) -> Message {
         Message::User(UserMessage {
             uuid: Uuid::new_v4(),
-            message: UserMessageInner {
-                role: "user".to_string(),
-                content: vec![crate::types::content::ContentBlock::Text {
-                    text: text.to_string(),
-                }],
-            },
+            content: vec![crate::types::content::ContentBlock::Text {
+                text: text.to_string(),
+            }],
             timestamp: chrono::Utc::now(),
         })
     }
@@ -166,12 +164,17 @@ mod tests {
     fn make_assistant_msg(text: &str) -> Message {
         Message::Assistant(AssistantMessage {
             uuid: Uuid::new_v4(),
-            message: AssistantMessageInner {
-                role: "assistant".to_string(),
+            message: ApiMessage {
+                id: String::new(),
+                model: String::new(),
+                role: Role::Assistant,
                 content: vec![crate::types::content::ContentBlock::Text {
                     text: text.to_string(),
                 }],
+                stop_reason: None,
+                usage: Usage::default(),
             },
+            request_id: None,
             timestamp: chrono::Utc::now(),
         })
     }

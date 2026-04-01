@@ -8,16 +8,16 @@
 /// Port of `services/teamMemorySync/index.ts`, `types.ts`, `watcher.ts`,
 /// `secretScanner.ts`, and `teamMemSecretGuard.ts`.
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -354,7 +354,7 @@ const SECRET_RULES: &[SecretRule] = &[
     },
     SecretRule {
         id: "gcp-api-key",
-        pattern: r"\b(AIza[\w\-]{35})(?:[\x60'\"\s;]|\\[nr]|$)",
+        pattern: r#"\b(AIza[\w\-]{35})(?:[\x60'"\s;]|\\[nr]|$)"#,
         flags: None,
     },
     SecretRule {
@@ -389,7 +389,7 @@ const SECRET_RULES: &[SecretRule] = &[
     },
     SecretRule {
         id: "stripe-access-token",
-        pattern: r"\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\x60'\"\s;]|\\[nr]|$)",
+        pattern: r#"\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\x60'"\s;]|\\[nr]|$)"#,
         flags: None,
     },
     SecretRule {
@@ -399,7 +399,7 @@ const SECRET_RULES: &[SecretRule] = &[
     },
     SecretRule {
         id: "npm-access-token",
-        pattern: r"\b(npm_[a-zA-Z0-9]{36})(?:[\x60'\"\s;]|\\[nr]|$)",
+        pattern: r#"\b(npm_[a-zA-Z0-9]{36})(?:[\x60'"\s;]|\\[nr]|$)"#,
         flags: None,
     },
     SecretRule {

@@ -10,10 +10,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 // ── Header detection ───────────────────────────────────────────────────────
 
@@ -189,7 +188,10 @@ static RE_TEMPLATE_VAR: LazyLock<Regex> = LazyLock::new(|| {
 fn substitute_variables(template: &str, variables: &HashMap<&str, &str>) -> String {
     RE_TEMPLATE_VAR.replace_all(template, |caps: &regex::Captures<'_>| {
         let key = &caps[1];
-        variables.get(key).copied().unwrap_or_else(|| caps.get(0).unwrap().as_str())
+        match variables.get(key) {
+            Some(val) => (*val).to_string(),
+            None => caps.get(0).unwrap().as_str().to_string(),
+        }
     })
     .to_string()
 }

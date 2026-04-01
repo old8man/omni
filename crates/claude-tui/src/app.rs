@@ -30,7 +30,9 @@ use claude_tools::{ToolRegistry, ToolUseContext};
 
 use crate::mouse::{translate_mouse_event, FocusManager, FocusTarget, MouseAction, TextSelection};
 use crate::theme::{detect_theme, Theme};
-use crate::widgets::message_list::{MessageEntry, MessageList, MessageListWidget};
+use crate::widgets::message_list::{
+    MessageEntry, MessageList, MessageListWidget, SystemSeverity, ToolUseStatus,
+};
 use crate::widgets::notification::{NotificationManager, NotificationWidget};
 use crate::widgets::permission_dialog::PermissionDialog;
 use crate::widgets::prompt_input::{InputAction, PromptInput, PromptInputWidget};
@@ -494,7 +496,7 @@ impl App {
                             let result = cmd.execute(&args, &cmd_ctx).await;
                             match result {
                                 CommandResult::Output(msg) => {
-                                    self.message_list.push(MessageEntry::System { text: msg });
+                                    self.message_list.push(MessageEntry::System { text: msg, severity: SystemSeverity::Info });
                                 }
                                 CommandResult::Quit => {
                                     self.should_quit = true;
@@ -506,6 +508,7 @@ impl App {
                                     }
                                     self.message_list.push(MessageEntry::System {
                                         text: format!("Switched to model: {}", name),
+                                        severity: SystemSeverity::Info,
                                     });
                                 }
                                 CommandResult::ClearConversation => {
@@ -513,6 +516,7 @@ impl App {
                                     self.message_list.clear();
                                     self.message_list.push(MessageEntry::System {
                                         text: "Conversation cleared.".to_string(),
+                                        severity: SystemSeverity::Info,
                                     });
                                 }
                                 CommandResult::CompactMessages(_instructions) => {
@@ -520,6 +524,7 @@ impl App {
                                     self.spinner.start(SpinnerMode::Thinking);
                                     self.message_list.push(MessageEntry::System {
                                         text: "Compacting conversation...".to_string(),
+                                        severity: SystemSeverity::Info,
                                     });
                                     let (stream_tx, mut stream_rx) =
                                         mpsc::channel::<StreamEvent>(128);
@@ -536,11 +541,13 @@ impl App {
                                         Ok(summary) => {
                                             self.message_list.push(MessageEntry::System {
                                                 text: format!("Compacted: {summary}"),
+                                                severity: SystemSeverity::Info,
                                             });
                                         }
                                         Err(e) => {
                                             self.message_list.push(MessageEntry::System {
                                                 text: format!("Compact error: {e}"),
+                                                severity: SystemSeverity::Info,
                                             });
                                         }
                                     }
@@ -659,7 +666,7 @@ impl App {
                                 } => {
                                     let msg = progress_message
                                         .unwrap_or_else(|| "Running prompt...".to_string());
-                                    self.message_list.push(MessageEntry::System { text: msg });
+                                    self.message_list.push(MessageEntry::System { text: msg, severity: SystemSeverity::Info });
                                     // Send the prompt content as a user message to the engine.
                                     self.pending_input = Some(content);
                                 }
@@ -734,6 +741,7 @@ impl App {
                             // Re-run the turn (recovery, stop-hook block, or budget continuation)
                             self.message_list.push(MessageEntry::System {
                                 text: "Continuing...".to_string(),
+                                severity: SystemSeverity::Info,
                             });
                             let tx2 = tx.clone();
                             tokio::spawn(async move {
@@ -745,6 +753,7 @@ impl App {
                             self.engine_busy = false;
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
+                                severity: SystemSeverity::Info,
                             });
                         }
                     }
@@ -871,6 +880,7 @@ impl App {
                             {
                                 self.message_list.push(MessageEntry::System {
                                     text: format!("Summary: {}", summary),
+                                    severity: SystemSeverity::Info,
                                 });
                             }
                             self.turn_tool_infos.clear();
@@ -889,6 +899,7 @@ impl App {
                         | Ok(TurnResult::TokenBudgetContinuation) => {
                             self.message_list.push(MessageEntry::System {
                                 text: "Continuing...".to_string(),
+                                severity: SystemSeverity::Info,
                             });
                             // Fire another ContinueTurn to keep going
                             let tx2 = tx.clone();
@@ -917,6 +928,7 @@ impl App {
                             self.engine_busy = false;
                             self.message_list.push(MessageEntry::System {
                                 text: format!("Error: {}", e),
+                                severity: SystemSeverity::Info,
                             });
                         }
                     }
@@ -991,6 +1003,7 @@ impl App {
                     });
                     self.message_list.push(MessageEntry::System {
                         text: format!("Denied: {}", message),
+                        severity: SystemSeverity::Info,
                     });
                 }
             }
@@ -1066,6 +1079,7 @@ impl App {
             StreamEvent::Error(err) => {
                 self.message_list.push(MessageEntry::System {
                     text: format!("Error: {}", err),
+                    severity: SystemSeverity::Info,
                 });
             }
             StreamEvent::RetryWait {
@@ -1078,6 +1092,7 @@ impl App {
                     self.spinner.start(SpinnerMode::Thinking);
                     self.message_list.push(MessageEntry::System {
                         text: "API overloaded, falling back to non-streaming request...".into(),
+                        severity: SystemSeverity::Info,
                     });
                 } else {
                     let status_label = if status == 0 {
@@ -1095,6 +1110,7 @@ impl App {
             StreamEvent::Compacted { summary } => {
                 self.message_list.push(MessageEntry::System {
                     text: format!("Context compacted: {summary}"),
+                    severity: SystemSeverity::Info,
                 });
             }
             _ => {}
