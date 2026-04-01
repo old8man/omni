@@ -299,11 +299,11 @@ pub fn count_model_visible_messages_since(
     for msg in messages {
         if !found_start {
             let msg_uuid = match msg {
-                Message::User(u) => u.uuid,
-                Message::Assistant(a) => a.uuid,
-                Message::System(_) => continue,
+                Message::User(u) => Some(u.uuid),
+                Message::Assistant(a) => Some(a.uuid),
+                Message::System(_) => None,
             };
-            if msg_uuid == target {
+            if msg_uuid == Some(target) {
                 found_start = true;
             }
             continue;
@@ -333,11 +333,11 @@ pub fn has_memory_writes_since(
     for msg in messages {
         if !found_start {
             let msg_uuid = match msg {
-                Message::User(u) => u.uuid,
-                Message::Assistant(a) => a.uuid,
-                Message::System(_) => continue,
+                Message::User(u) => Some(u.uuid),
+                Message::Assistant(a) => Some(a.uuid),
+                Message::System(_) => None,
             };
-            if msg_uuid == since_uuid.unwrap() {
+            if msg_uuid == since_uuid {
                 found_start = true;
             }
             continue;
@@ -499,16 +499,14 @@ pub const ENTRYPOINT_NAME: &str = "MEMORY.md";
 mod tests {
     use super::*;
     use crate::types::content::ContentBlock;
-    use crate::types::message::{AssistantMessage, AssistantMessageInner, UserMessage};
+    use crate::types::message::{ApiMessage, AssistantMessage, Role, UserMessage};
+    use crate::types::usage::Usage;
     use uuid::Uuid;
 
     fn make_user_msg() -> Message {
         Message::User(UserMessage {
             uuid: Uuid::new_v4(),
-            message: crate::types::message::UserMessageInner {
-                role: "user".to_string(),
-                content: vec![],
-            },
+            content: vec![],
             timestamp: chrono::Utc::now(),
         })
     }
@@ -516,10 +514,15 @@ mod tests {
     fn make_assistant_msg() -> Message {
         Message::Assistant(AssistantMessage {
             uuid: Uuid::new_v4(),
-            message: AssistantMessageInner {
-                role: "assistant".to_string(),
+            message: ApiMessage {
+                id: String::new(),
+                model: String::new(),
+                role: Role::Assistant,
                 content: vec![],
+                stop_reason: None,
+                usage: Usage::default(),
             },
+            request_id: None,
             timestamp: chrono::Utc::now(),
         })
     }

@@ -8,7 +8,7 @@
 /// Port of `services/MagicDocs/magicDocs.ts` and `services/MagicDocs/prompts.ts`.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -30,9 +30,18 @@ pub struct MagicDocHeader {
 ///
 /// Returns the parsed header info, or `None` if the content doesn't have a
 /// `# MAGIC DOC: [title]` marker.
+static RE_MAGIC_DOC_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^#\s*MAGIC\s+DOC:\s*(.+)$").expect("static regex")
+});
+static RE_ITALICS_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*\n(?:\s*\n)?(.+?)(?:\n|$)").expect("static regex")
+});
+static RE_ITALIC_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[_*](.+?)[_*]\s*$").expect("static regex")
+});
+
 pub fn detect_magic_doc_header(content: &str) -> Option<MagicDocHeader> {
-    let header_re = Regex::new(r"(?im)^#\s*MAGIC\s+DOC:\s*(.+)$").unwrap();
-    let header_match = header_re.captures(content)?;
+    let header_match = RE_MAGIC_DOC_HEADER.captures(content)?;
     let title = header_match.get(1)?.as_str().trim().to_string();
 
     // Find the position right after the header line
@@ -40,14 +49,12 @@ pub fn detect_magic_doc_header(content: &str) -> Option<MagicDocHeader> {
     let after_header = &content[header_end..];
 
     // Look for italics on the next non-blank line
-    let italics_re = Regex::new(r"^\s*\n(?:\s*\n)?(.+?)(?:\n|$)").unwrap();
-    let instructions = italics_re
+    let instructions = RE_ITALICS_LINE
         .captures(after_header)
         .and_then(|cap| cap.get(1))
         .and_then(|next_line| {
             let line = next_line.as_str();
-            let italic_re = Regex::new(r"^[_*](.+?)[_*]\s*$").unwrap();
-            italic_re
+            RE_ITALIC_MARKERS
                 .captures(line)
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().trim().to_string())
@@ -174,10 +181,13 @@ Use the Edit tool with file_path: {{docPath}}
 
 REMEMBER: Only update if there is substantial new information. The Magic Doc header (# MAGIC DOC: {{docTitle}}) must remain unchanged."#;
 
+static RE_TEMPLATE_VAR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{\{(\w+)\}\}").expect("static regex")
+});
+
 /// Substitute `{{variable}}` placeholders in a template string.
 fn substitute_variables(template: &str, variables: &HashMap<&str, &str>) -> String {
-    let re = Regex::new(r"\{\{(\w+)\}\}").unwrap();
-    re.replace_all(template, |caps: &regex::Captures<'_>| {
+    RE_TEMPLATE_VAR.replace_all(template, |caps: &regex::Captures<'_>| {
         let key = &caps[1];
         variables.get(key).copied().unwrap_or_else(|| caps.get(0).unwrap().as_str())
     })
