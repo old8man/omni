@@ -369,6 +369,11 @@ impl PromptInput {
             (_, KeyCode::Char(c))
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
+                // Any editing resets history navigation — user is now editing
+                // a new/modified entry, not browsing history
+                if self.history_index.is_some() {
+                    self.history_index = None;
+                }
                 self.insert_char(c);
                 // Auto-trigger slash command completion when typing '/' at start of line
                 let current_line = &self.lines[self.cursor.row];
@@ -398,6 +403,7 @@ impl PromptInput {
 
             // ---- Backspace ----
             (_, KeyCode::Backspace) => {
+                if self.history_index.is_some() { self.history_index = None; }
                 self.backspace();
                 self.completion = None;
                 InputAction::None
@@ -405,6 +411,7 @@ impl PromptInput {
 
             // ---- Delete ----
             (_, KeyCode::Delete) => {
+                if self.history_index.is_some() { self.history_index = None; }
                 self.delete_forward();
                 self.completion = None;
                 InputAction::None
