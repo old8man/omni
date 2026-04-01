@@ -1347,6 +1347,7 @@ impl App {
             }
             StreamEvent::Done { stop_reason: _ } => {
                 self.spinner.stop();
+                self.engine_busy = false;
             }
             StreamEvent::UsageUpdate(usage) => {
                 self.spinner.tokens = usage.output_tokens;
@@ -1362,6 +1363,8 @@ impl App {
                 self.spinner.start(SpinnerMode::Thinking);
             }
             StreamEvent::Error(err) => {
+                self.spinner.stop();
+                self.engine_busy = false;
                 self.message_list.push(MessageEntry::System {
                     text: format!("Error: {}", err),
                     severity: SystemSeverity::Error,
