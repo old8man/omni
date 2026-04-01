@@ -20,11 +20,11 @@ pub struct RetryPolicy {
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
-            base_delay: Duration::from_millis(500),
-            max_retries: 10,
-            max_529_retries: 3,
-            persistent_max_backoff: Duration::from_secs(60),
-            persistent_reset_cap: Duration::from_secs(300),
+            base_delay: Duration::from_millis(1000),
+            max_retries: 3,
+            max_529_retries: 2,
+            persistent_max_backoff: Duration::from_secs(30),
+            persistent_reset_cap: Duration::from_secs(60),
         }
     }
 }
