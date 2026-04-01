@@ -1843,11 +1843,13 @@ impl MockRateLimits {
         }
 
         // Find the limit with the furthest reset time
-        let furthest = self
+        let Some(furthest) = self
             .exceeded_limits
             .iter()
-            .max_by(|a, b| a.resets_at.partial_cmp(&b.resets_at).unwrap())
-            .unwrap();
+            .max_by(|a, b| a.resets_at.partial_cmp(&b.resets_at).unwrap_or(std::cmp::Ordering::Equal))
+        else {
+            return; // empty after is_empty check above — unreachable
+        };
 
         let claim_str = match furthest.limit_type {
             RateLimitType::FiveHour => "five_hour",

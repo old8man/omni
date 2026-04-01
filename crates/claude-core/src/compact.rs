@@ -766,7 +766,8 @@ fn merge_reasoning_blocks(messages: Vec<Value>) -> Vec<Value> {
                     .is_some_and(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"));
                 if is_thinking && prev_is_thinking {
                     // Merge: keep current block's signature, combine thinking text
-                    let prev = merged.last_mut().unwrap();
+                    // Safety: prev_is_thinking is true only when merged.last() is Some
+                    let Some(prev) = merged.last_mut() else { merged.push(block); continue; };
                     if let (Some(prev_text), Some(cur_text)) = (
                         prev.get("thinking")
                             .and_then(|t| t.as_str())
@@ -783,7 +784,9 @@ fn merge_reasoning_blocks(messages: Vec<Value>) -> Vec<Value> {
                     merged.push(block);
                 }
             }
-            *msg.get_mut("content").unwrap() = Value::Array(merged);
+            if let Some(content) = msg.get_mut("content") {
+                *content = Value::Array(merged);
+            }
         }
         result.push(msg);
     }

@@ -67,10 +67,9 @@ impl DestructiveCommandDetector {
                 "Note: may overwrite remote history",
             ),
             (
-                Regex::new(
-                    r"\bgit\s+clean\b(?![^;&|\n]*(?:-[a-zA-Z]*n|--dry-run))[^;&|\n]*-[a-zA-Z]*f",
-                )
-                .unwrap(),
+                // git clean -f without --dry-run/-n (checked in two steps since
+                // the `regex` crate does not support lookahead assertions)
+                Regex::new(r"\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f").unwrap(),
                 "Note: may permanently delete untracked files",
             ),
             (
@@ -143,8 +142,24 @@ impl DestructiveCommandDetector {
     /// Returns a warning message if the command matches a known destructive
     /// pattern, or `None` if no match is found.
     pub fn detect(&self, command: &str) -> Option<&'static str> {
+        // Pre-check: git clean -f with --dry-run or -n is safe
+        let dry_run_re = regex::Regex::new(r"\bgit\s+clean\b").ok();
+        let has_dry_run = dry_run_re
+            .as_ref()
+            .is_some_and(|re| re.is_match(command))
+            && (command.contains("--dry-run") || {
+                // Check for -n flag (but not as part of a longer flag group after f)
+                regex::Regex::new(r"-[a-zA-Z]*n")
+                    .ok()
+                    .is_some_and(|re| re.is_match(command))
+            });
+
         for (pattern, warning) in &self.patterns {
             if pattern.is_match(command) {
+                // Skip git clean -f warning if --dry-run/-n is present
+                if has_dry_run && warning.contains("untracked files") {
+                    continue;
+                }
                 return Some(warning);
             }
         }
@@ -2196,11 +2211,9 @@ impl SedValidator {
         }
 
         // Paranoid: reject 's' commands ending with dangerous chars
-        let s_start_re = Regex::new(r"^s.").unwrap();
-        let dangerous_end_re = Regex::new(r"[wWeE]$").unwrap();
-        if s_start_re.is_match(cmd) && dangerous_end_re.is_match(cmd) {
-            let proper_subst_re = Regex::new(r"^s([^\\\n]).*?\1.*?\1[^wWeE]*$").unwrap();
-            if !proper_subst_re.is_match(cmd) {
+        if cmd.len() >= 2 && cmd.starts_with('s') && cmd.ends_with(|c: char| "wWeE".contains(c)) {
+            // Verify it's a proper substitution: s<delim>...<delim>...<delim>[flags]
+            if !Self::is_proper_substitution_with_safe_flags(cmd) {
                 return true;
             }
         }
@@ -2236,9 +2249,7 @@ impl SedValidator {
         }
 
         // Check for substitution commands with dangerous flags
-        let subst_match_re = Regex::new(r"s([^\\\n]).*?\1.*?\1(.*?)$").unwrap();
-        if let Some(cap) = subst_match_re.captures(cmd) {
-            let flags = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        if let Some(flags) = Self::extract_substitution_flags(cmd) {
             if flags.contains('w')
                 || flags.contains('W')
                 || flags.contains('e')
@@ -2255,6 +2266,52 @@ impl SedValidator {
         }
 
         false
+    }
+
+    /// Parse a sed substitution command (s<delim>...<delim>...<delim>[flags])
+    /// and check if all flags after the final delimiter are safe (no w/W/e/E).
+    fn is_proper_substitution_with_safe_flags(cmd: &str) -> bool {
+        if let Some(flags) = Self::extract_substitution_flags(cmd) {
+            !flags.contains('w')
+                && !flags.contains('W')
+                && !flags.contains('e')
+                && !flags.contains('E')
+        } else {
+            false // Can't parse → not proper
+        }
+    }
+
+    /// Extract the flags portion from a sed s-command: `s/pat/repl/FLAGS`.
+    /// Returns `None` if the command is not a valid s-command.
+    fn extract_substitution_flags(cmd: &str) -> Option<&str> {
+        let bytes = cmd.as_bytes();
+        if bytes.len() < 2 || bytes[0] != b's' {
+            return None;
+        }
+        let delim = bytes[1];
+        if delim == b'\\' || delim == b'\n' {
+            return None;
+        }
+        // Find three occurrences of `delim` (skipping escaped ones)
+        let mut count = 0;
+        let mut i = 2;
+        let mut last_delim_pos = 0;
+        while i < bytes.len() && count < 2 {
+            if bytes[i] == b'\\' {
+                i += 2; // skip escaped char
+                continue;
+            }
+            if bytes[i] == delim {
+                count += 1;
+                last_delim_pos = i;
+            }
+            i += 1;
+        }
+        if count == 2 {
+            Some(&cmd[last_delim_pos + 1..])
+        } else {
+            None
+        }
     }
 }
 
