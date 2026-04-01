@@ -231,11 +231,20 @@ impl ApiClient {
     /// Apply common headers shared by both streaming and non-streaming requests.
     fn apply_common_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let (auth_header, auth_value) = self.auth.to_header();
+
+        // Session ID for request attribution (matches original Claude Code)
+        let session_id = std::env::var("CLAUDE_CODE_SESSION_ID")
+            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
+
         req = req
             .header("anthropic-version", &self.config.api_version)
             .header("content-type", "application/json")
             .header(auth_header, auth_value)
-            .header("anthropic-beta", self.build_beta_header());
+            .header("anthropic-beta", self.build_beta_header())
+            // Required headers matching the original Claude Code client
+            .header("x-app", "cli")
+            .header("User-Agent", format!("claude-cli/1.0.0 (external, cli)"))
+            .header("X-Claude-Code-Session-Id", &session_id);
 
         // Prompt-cache control: set breakpoint TTL when configured.
         if let Some(ttl) = self.config.cache_ttl {
