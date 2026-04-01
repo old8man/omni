@@ -278,7 +278,7 @@ impl ApiClient {
         system: &[ContentBlock],
         tools: &[ToolDefinition],
     ) -> Result<Value> {
-        let url = format!("{}/v1/messages?beta=true", self.config.base_url);
+        let url = format!("{}/v1/messages", self.config.base_url);
         let mut body = build_request_body(&self.config, messages, system, tools);
         body["stream"] = json!(false);
 
@@ -305,7 +305,7 @@ impl ApiClient {
         system: &[ContentBlock],
         tools: &[ToolDefinition],
     ) -> Result<Response> {
-        let url = format!("{}/v1/messages?beta=true", self.config.base_url);
+        let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
 
         let request = self.http.post(&url);
@@ -351,7 +351,7 @@ impl ApiClient {
         retry_policy: &RetryPolicy,
         event_tx: &mpsc::Sender<StreamEvent>,
     ) -> Result<StreamResponse> {
-        let url = format!("{}/v1/messages?beta=true", self.config.base_url);
+        let url = format!("{}/v1/messages", self.config.base_url);
         let body = build_request_body(&self.config, messages, system, tools);
 
         let mut attempt: u32 = 0;
