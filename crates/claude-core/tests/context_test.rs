@@ -22,12 +22,16 @@ async fn test_build_system_prompt_basic() {
         ("Bash".into(), "Run commands".into()),
     ];
     let blocks = build_system_prompt(tmp.path(), &tools).await.unwrap();
-    // Should have multiple sections: intro, system, doing tasks, actions, tools, tone, etc.
+    // Should have multiple sections: attribution, intro, system, doing tasks, actions, tools, tone, etc.
     assert!(blocks.len() >= 5);
 
-    // First block should be the intro section mentioning software engineering
-    let first_text = blocks[0]["text"].as_str().unwrap();
-    assert!(first_text.contains("software engineering"));
+    // The prompt should contain software engineering guidance somewhere
+    let all_text: String = blocks
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(all_text.contains("software engineering"));
 }
 
 #[tokio::test]

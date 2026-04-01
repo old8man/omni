@@ -9,6 +9,7 @@ pub mod edit;
 pub mod glob_tool;
 pub mod grep;
 pub mod lsp_tool;
+pub mod mcp_auth;
 pub mod mcp_resources;
 pub mod mcp_tool;
 pub mod notebook_edit;

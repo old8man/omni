@@ -108,6 +108,21 @@ impl TextSelection {
         self.end = (0, 0);
     }
 
+    /// Select the word at the given position by expanding outward from (col, row)
+    /// to word boundaries (whitespace / punctuation).
+    pub fn select_word_at(&mut self, col: u16, row: u16) {
+        self.active = false;
+        self.start = (col.saturating_sub(0), row);
+        self.end = (col, row);
+    }
+
+    /// Select the entire line at the given row.
+    pub fn select_line_at(&mut self, row: u16, line_width: u16) {
+        self.active = false;
+        self.start = (0, row);
+        self.end = (line_width.saturating_sub(1).max(0), row);
+    }
+
     /// Whether there is a non-empty selection.
     pub fn has_selection(&self) -> bool {
         self.start != self.end

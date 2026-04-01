@@ -13,6 +13,62 @@ use ratatui::widgets::Widget;
 
 use crate::input::InputMode;
 
+/// A temporary flash message shown in the status bar, auto-dismissed after a timeout.
+#[derive(Clone, Debug)]
+pub struct FlashMessage {
+    pub text: String,
+    pub style: FlashStyle,
+    pub expires_at: std::time::Instant,
+}
+
+/// Style for flash messages.
+#[derive(Clone, Copy, Debug)]
+pub enum FlashStyle {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl FlashMessage {
+    pub fn new(text: impl Into<String>, style: FlashStyle, duration_ms: u64) -> Self {
+        Self {
+            text: text.into(),
+            style,
+            expires_at: std::time::Instant::now() + std::time::Duration::from_millis(duration_ms),
+        }
+    }
+
+    pub fn info(text: impl Into<String>) -> Self {
+        Self::new(text, FlashStyle::Info, 3000)
+    }
+
+    pub fn success(text: impl Into<String>) -> Self {
+        Self::new(text, FlashStyle::Success, 2000)
+    }
+
+    pub fn warning(text: impl Into<String>) -> Self {
+        Self::new(text, FlashStyle::Warning, 4000)
+    }
+
+    pub fn error(text: impl Into<String>) -> Self {
+        Self::new(text, FlashStyle::Error, 5000)
+    }
+
+    pub fn is_expired(&self) -> bool {
+        std::time::Instant::now() >= self.expires_at
+    }
+
+    fn color(&self) -> Color {
+        match self.style {
+            FlashStyle::Info => Color::Cyan,
+            FlashStyle::Success => Color::Green,
+            FlashStyle::Warning => Color::Yellow,
+            FlashStyle::Error => Color::Red,
+        }
+    }
+}
+
 /// Configuration for the status bar display.
 pub struct StatusBarState {
     /// The model name to display.
@@ -33,6 +89,8 @@ pub struct StatusBarState {
     pub session_name: Option<String>,
     /// Whether a rate limit is currently active.
     pub rate_limited: bool,
+    /// Flash message (shown temporarily on the right side).
+    pub flash: Option<FlashMessage>,
 }
 
 impl Default for StatusBarState {
@@ -47,6 +105,7 @@ impl Default for StatusBarState {
             context_percent: 0.0,
             session_name: None,
             rate_limited: false,
+            flash: None,
         }
     }
 }
@@ -236,7 +295,7 @@ impl<'a> Widget for StatusBarWidget<'a> {
 
         // Rate limit warning
         if self.state.rate_limited {
-            right_spans.push(sep);
+            right_spans.push(sep.clone());
             right_spans.push(Span::styled(
                 "\u{26A0} RATE LIMITED",
                 Style::default()
@@ -246,11 +305,26 @@ impl<'a> Widget for StatusBarWidget<'a> {
             ));
         }
 
+        // Flash message (replaces right section when active)
+        if let Some(ref flash) = self.state.flash {
+            if !flash.is_expired() {
+                right_spans.clear();
+                right_spans.push(sep);
+                right_spans.push(Span::styled(
+                    &flash.text,
+                    Style::default()
+                        .fg(flash.color())
+                        .bg(Color::Rgb(30, 30, 40))
+                        .add_modifier(Modifier::BOLD),
+                ));
+                right_spans.push(Span::styled(" ", bg_style(Color::Reset)));
+            }
+        }
+
         // Combine all spans and render
         let mut all_spans = left_spans;
         all_spans.extend(center_spans);
         all_spans.extend(right_spans);
-        // Pad to fill remaining width
         all_spans.push(Span::styled(" ", bg_style(Color::Reset)));
 
         let line = Line::from(all_spans);
@@ -338,6 +412,7 @@ mod tests {
             context_percent: 45.0,
             session_name: Some("my-project".to_string()),
             rate_limited: false,
+            flash: None,
         };
         let widget = StatusBarWidget::new(&state);
         let area = Rect::new(0, 0, 120, 1);

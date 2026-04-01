@@ -5,6 +5,9 @@
 //! Supports 13+ message types with rich rendering including badges, spinners,
 //! syntax highlighting, collapsible sections, and diff previews.
 
+use std::cell::Cell;
+use std::time::Instant;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -13,6 +16,12 @@ use ratatui::widgets::Widget;
 
 use crate::markdown::render_markdown;
 use crate::syntax::highlight_code_block;
+
+/// Minimum interval between scroll-triggered re-renders (60fps).
+const SCROLL_DEBOUNCE_MS: u128 = 16;
+
+/// Number of extra lines to render above and below the visible viewport.
+const OVERSCAN_LINES: usize = 10;
 
 /// Spinner frames for animated tool-use indicators.
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -126,6 +135,12 @@ pub struct MessageList {
     streaming: bool,
     /// Compact mode: collapse tool outputs and thinking blocks.
     compact_mode: bool,
+    /// Cached viewport height from last render.
+    viewport_height: Cell<usize>,
+    /// Number of messages added since the user scrolled away from the bottom.
+    new_messages_count: usize,
+    /// Timestamp of the last scroll event (for debouncing).
+    last_scroll_time: Option<Instant>,
 }
 
 impl MessageList {
@@ -143,6 +158,9 @@ impl MessageList {
             expanded: std::collections::HashSet::new(),
             streaming: false,
             compact_mode: false,
+            viewport_height: Cell::new(0),
+            new_messages_count: 0,
+            last_scroll_time: None,
         }
     }
 
@@ -161,6 +179,8 @@ impl MessageList {
         self.messages.push(msg);
         if self.auto_scroll {
             self.scroll_to_bottom();
+        } else {
+            self.new_messages_count += 1;
         }
         if self.search_query.is_some() {
             self.update_search_matches();
@@ -192,16 +212,27 @@ impl MessageList {
         self.messages.is_empty()
     }
 
+    /// Whether enough time has elapsed since the last scroll event to re-render.
+    pub fn should_debounce_scroll(&self) -> bool {
+        if let Some(last) = self.last_scroll_time {
+            last.elapsed().as_millis() < SCROLL_DEBOUNCE_MS
+        } else {
+            false
+        }
+    }
+
     /// Scroll up by the given number of lines.
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
         self.sticky_bottom = false;
         self.auto_scroll = false;
+        self.last_scroll_time = Some(Instant::now());
     }
 
     /// Scroll down by the given number of lines.
     pub fn scroll_down(&mut self, lines: usize) {
         self.scroll_offset += lines;
+        self.last_scroll_time = Some(Instant::now());
         // sticky_bottom and auto_scroll re-enabled in render if we reach the bottom
     }
 
@@ -209,6 +240,7 @@ impl MessageList {
     pub fn scroll_to_bottom(&mut self) {
         self.sticky_bottom = true;
         self.auto_scroll = true;
+        self.new_messages_count = 0;
     }
 
     /// Jump to the top.
@@ -229,6 +261,8 @@ impl MessageList {
         self.search_focus = 0;
         self.expanded.clear();
         self.streaming = false;
+        self.new_messages_count = 0;
+        self.last_scroll_time = None;
     }
 
     /// Advance the spinner frame. Call this on each SpinnerTick (~80ms).
@@ -253,6 +287,16 @@ impl MessageList {
     /// Whether the assistant is currently streaming.
     pub fn is_streaming(&self) -> bool {
         self.streaming
+    }
+
+    /// Number of new messages since the user scrolled away from the bottom.
+    pub fn new_messages_count(&self) -> usize {
+        self.new_messages_count
+    }
+
+    /// Cached viewport height (set during render).
+    pub fn viewport_height(&self) -> usize {
+        self.viewport_height.get()
     }
 
     /// Find a ToolUse entry by tool use ID and update it in-place.
@@ -420,6 +464,71 @@ impl MessageList {
         }
     }
 
+    /// Estimate the rendered height of a message at a given index, accounting for expand state.
+    /// This is used by the virtual scrolling renderer to compute cumulative offsets.
+    fn estimate_message_height_for_render(&self, msg: &MessageEntry, width: u16, msg_idx: usize) -> usize {
+        let w = width.max(1) as usize;
+        let is_expanded = self.expanded.contains(&msg_idx);
+        match msg {
+            MessageEntry::User { text, images } => {
+                2 + text.lines().count().max(1).saturating_add(
+                    text.lines().map(|l| l.len() / w).sum::<usize>()
+                ) + images.len()
+            }
+            MessageEntry::Assistant { text } => {
+                let extra = if msg_idx + 1 == self.messages.len() && self.streaming { 1 } else { 0 };
+                2 + text.lines().count().max(1).saturating_add(
+                    text.lines().map(|l| l.len() / w).sum::<usize>()
+                ) + extra
+            }
+            MessageEntry::ToolUse { input, .. } => {
+                2 + if is_expanded {
+                    serde_json::to_string_pretty(input)
+                        .unwrap_or_default()
+                        .lines()
+                        .count()
+                } else {
+                    1
+                }
+            }
+            MessageEntry::ToolResult { output, .. } => {
+                let output_lines = output.lines().count();
+                let visible = if is_expanded || output_lines <= COLLAPSE_THRESHOLD {
+                    output_lines
+                } else {
+                    COLLAPSE_THRESHOLD + 1
+                };
+                1 + visible
+            }
+            MessageEntry::Thinking { text, is_collapsed } => {
+                let collapsed = *is_collapsed && !is_expanded;
+                if collapsed {
+                    1 + THINKING_PREVIEW_LINES.min(text.lines().count())
+                } else {
+                    1 + text.lines().count()
+                }
+            }
+            MessageEntry::System { .. } => 1,
+            MessageEntry::CompactBoundary { .. } => 3,
+            MessageEntry::CommandOutput { output, .. } => 1 + output.lines().count(),
+            MessageEntry::ErrorRetry { error, .. } => if error.is_empty() { 1 } else { 2 },
+            MessageEntry::RateLimitWarning { .. } => 2,
+            MessageEntry::PermissionRequest { input_preview, .. } => {
+                if input_preview.is_empty() { 1 } else { 2 }
+            }
+            MessageEntry::AgentStatus { .. } => 1,
+            MessageEntry::DiffPreview { diff_text, .. } => {
+                let diff_lines = diff_text.lines().count();
+                let visible = if is_expanded || diff_lines <= COLLAPSE_THRESHOLD {
+                    diff_lines
+                } else {
+                    COLLAPSE_THRESHOLD + 1
+                };
+                1 + visible
+            }
+        }
+    }
+
     /// Recompute which message indices match the search query.
     fn update_search_matches(&mut self) {
         self.search_matches.clear();
@@ -516,9 +625,59 @@ impl<'a> Widget for MessageListWidget<'a> {
             return;
         }
 
+        let visible_height = area.height as usize;
+        self.list.viewport_height.set(visible_height);
+
+        // Phase 1: Compute cumulative line offsets per message using height estimates.
+        // cumulative_heights[i] = total lines for messages 0..=i
+        let msg_count = self.list.messages.len();
+        if msg_count == 0 {
+            return;
+        }
+
+        let mut cumulative_heights: Vec<usize> = Vec::with_capacity(msg_count);
+        let mut running_total: usize = 0;
+        for (idx, msg) in self.list.messages.iter().enumerate() {
+            let h = self.list.estimate_message_height_for_render(msg, area.width, idx);
+            running_total += h;
+            cumulative_heights.push(running_total);
+        }
+        let total_lines = running_total;
+
+        // Phase 2: Determine the scroll line offset.
+        let scroll = if self.list.sticky_bottom {
+            total_lines.saturating_sub(visible_height)
+        } else {
+            self.list
+                .scroll_offset
+                .min(total_lines.saturating_sub(visible_height))
+        };
+
+        let viewport_start = scroll.saturating_sub(OVERSCAN_LINES);
+        let viewport_end = (scroll + visible_height + OVERSCAN_LINES).min(total_lines);
+
+        // Phase 3: Find the range of messages that overlap [viewport_start..viewport_end].
+        let first_msg = match cumulative_heights.binary_search(&(viewport_start + 1)) {
+            Ok(idx) => idx,
+            Err(idx) => idx,
+        };
+        let last_msg = match cumulative_heights.binary_search(&viewport_end) {
+            Ok(idx) => idx,
+            Err(idx) => idx.min(msg_count - 1),
+        };
+
+        // The line offset where first_msg starts.
+        let first_msg_line_start = if first_msg == 0 {
+            0
+        } else {
+            cumulative_heights[first_msg - 1]
+        };
+
+        // Phase 4: Render only the visible messages into lines.
         let mut all_lines: Vec<Line> = Vec::new();
 
-        for (msg_idx, msg) in self.list.messages.iter().enumerate() {
+        for msg_idx in first_msg..=last_msg {
+            let msg = &self.list.messages[msg_idx];
             let is_search_focus = self
                 .list
                 .search_matches
@@ -533,611 +692,23 @@ impl<'a> Widget for MessageListWidget<'a> {
                 None
             };
 
-            match msg {
-                MessageEntry::User { text, images } => {
-                    all_lines.push(Line::from(""));
-                    all_lines.push(Line::from(vec![Span::styled(
-                        " You ",
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Blue)
-                            .add_modifier(Modifier::BOLD),
-                    )]));
-                    // Render user text with markdown
-                    let md_lines = render_markdown(text);
-                    for md_line in md_lines {
-                        let mut spans = vec![Span::raw(" ")];
-                        spans.extend(md_line.spans.into_iter().map(|s| {
-                            if let Some(hl) = search_highlight {
-                                Span::styled(s.content.to_string(), s.style.patch(hl))
-                            } else {
-                                Span::styled(s.content.to_string(), s.style)
-                            }
-                        }));
-                        all_lines.push(Line::from(spans));
-                    }
-                    // Show image indicators
-                    for img in images {
-                        all_lines.push(Line::from(vec![
-                            Span::raw("  "),
-                            Span::styled(
-                                format!("📎 {}", img),
-                                Style::default()
-                                    .fg(Color::DarkGray)
-                                    .add_modifier(Modifier::ITALIC),
-                            ),
-                        ]));
-                    }
-                }
-                MessageEntry::Assistant { text } => {
-                    all_lines.push(Line::from(""));
-                    all_lines.push(Line::from(vec![Span::styled(
-                        " Claude ",
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    )]));
-                    let md_lines = render_markdown(text);
-                    for md_line in md_lines {
-                        let mut spans = vec![Span::raw(" ")];
-                        spans.extend(md_line.spans.into_iter().map(|s| {
-                            if let Some(hl) = search_highlight {
-                                Span::styled(s.content.to_string(), s.style.patch(hl))
-                            } else {
-                                Span::styled(s.content.to_string(), s.style)
-                            }
-                        }));
-                        all_lines.push(Line::from(spans));
-                    }
-                    // Show streaming cursor if this is the last message and we're streaming
-                    let is_last = msg_idx + 1 == self.list.messages.len();
-                    if is_last && self.list.streaming {
-                        // Blinking cursor effect: use spinner frame to alternate
-                        let cursor_char = if self.list.spinner_frame.is_multiple_of(2) {
-                            "█"
-                        } else {
-                            " "
-                        };
-                        all_lines.push(Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled(
-                                cursor_char,
-                                Style::default().fg(Color::Green),
-                            ),
-                        ]));
-                    }
-                }
-                MessageEntry::ToolUse {
-                    id: _,
-                    name,
-                    input,
-                    status,
-                } => {
-                    let (status_indicator, status_color) = match status {
-                        ToolUseStatus::Pending => ("◦", Color::DarkGray),
-                        ToolUseStatus::Running => {
-                            let frame = SPINNER_FRAMES[self.list.spinner_frame];
-                            // We can't return a reference to a local, so we handle
-                            // this case inline below
-                            (frame, Color::Yellow)
-                        }
-                        ToolUseStatus::Complete => ("✔", Color::Green),
-                        ToolUseStatus::Error => ("✘", Color::Red),
-                    };
-
-                    let mut tool_spans = vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} ", status_indicator),
-                            Style::default()
-                                .fg(status_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!(" {} ", name),
-                            Style::default().fg(Color::White).bg(Color::Magenta),
-                        ),
-                    ];
-
-                    // Show elapsed time for running tools
-                    if *status == ToolUseStatus::Running {
-                        tool_spans.push(Span::styled(
-                            " running...",
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::ITALIC),
-                        ));
-                    }
-
-                    all_lines.push(Line::from(tool_spans));
-
-                    // Show input summary (compact by default, expanded on toggle)
-                    let input_str =
-                        serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
-                    if is_expanded {
-                        // Full JSON input with syntax highlighting
-                        let highlighted = highlight_code_block("json", &input_str);
-                        for hl_line in highlighted {
-                            let mut spans = vec![Span::raw("    ")];
-                            spans.extend(
-                                hl_line
-                                    .spans
-                                    .into_iter()
-                                    .map(|s| Span::styled(s.content.to_string(), s.style)),
-                            );
-                            all_lines.push(Line::from(spans));
-                        }
-                    } else {
-                        // Compact one-line summary
-                        let compact = serde_json::to_string(input)
-                            .unwrap_or_else(|_| input.to_string());
-                        let summary = if compact.len() > 120 {
-                            format!("{}...", &compact[..117])
-                        } else {
-                            compact
-                        };
-                        all_lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(summary, Style::default().fg(Color::DarkGray)),
-                        ]));
-                    }
-                }
-                MessageEntry::ToolResult {
-                    id: _,
-                    name,
-                    output,
-                    is_error,
-                    duration_ms,
-                } => {
-                    let indicator = if *is_error { "✘" } else { "✔" };
-                    let color = if *is_error { Color::Red } else { Color::Green };
-                    let label = if *is_error { "Error" } else { "Done" };
-
-                    let mut result_spans = vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} ", indicator),
-                            Style::default().fg(color).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("{} ", label),
-                            Style::default().fg(color),
-                        ),
-                        Span::styled(
-                            name.clone(),
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ];
-
-                    // Show duration if available
-                    if let Some(ms) = duration_ms {
-                        let duration_text = if *ms >= 1000 {
-                            format!(" ({:.1}s)", *ms as f64 / 1000.0)
-                        } else {
-                            format!(" ({}ms)", ms)
-                        };
-                        result_spans.push(Span::styled(
-                            duration_text,
-                            Style::default().fg(Color::DarkGray),
-                        ));
-                    }
-
-                    all_lines.push(Line::from(result_spans));
-
-                    // Output lines with collapsing
-                    let output_lines: Vec<&str> = output.lines().collect();
-                    let show_all = is_expanded || output_lines.len() <= COLLAPSE_THRESHOLD;
-                    let visible_count = if show_all {
-                        output_lines.len()
-                    } else {
-                        COLLAPSE_THRESHOLD
-                    };
-
-                    // Attempt syntax highlighting for structured output
-                    let looks_like_json = output.trim_start().starts_with('{')
-                        || output.trim_start().starts_with('[');
-
-                    if looks_like_json && !*is_error {
-                        let highlighted = highlight_code_block("json", output);
-                        for (i, hl_line) in highlighted.iter().enumerate() {
-                            if i >= visible_count {
-                                break;
-                            }
-                            let mut spans = vec![Span::raw("    ")];
-                            spans.extend(
-                                hl_line
-                                    .spans
-                                    .iter()
-                                    .map(|s| Span::styled(s.content.to_string(), s.style)),
-                            );
-                            all_lines.push(Line::from(spans));
-                        }
-                    } else {
-                        for line in output_lines.iter().take(visible_count) {
-                            let style = if *is_error {
-                                Style::default().fg(Color::Red)
-                            } else {
-                                Style::default().fg(Color::DarkGray)
-                            };
-                            all_lines.push(Line::from(Span::styled(
-                                format!("    {}", line),
-                                style,
-                            )));
-                        }
-                    }
-
-                    if !show_all {
-                        let remaining = output_lines.len() - COLLAPSE_THRESHOLD;
-                        all_lines.push(Line::from(Span::styled(
-                            format!("    ▸ {} more lines", remaining),
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        )));
-                    }
-                }
-                MessageEntry::Thinking {
-                    text,
-                    is_collapsed,
-                } => {
-                    let collapsed = *is_collapsed && !is_expanded;
-                    let thinking_lines: Vec<&str> = text.lines().collect();
-
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            "💭 thinking",
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC | Modifier::BOLD),
-                        ),
-                        if collapsed && thinking_lines.len() > THINKING_PREVIEW_LINES {
-                            Span::styled(
-                                format!(
-                                    "  ▸ {} lines",
-                                    thinking_lines.len()
-                                ),
-                                Style::default()
-                                    .fg(Color::DarkGray)
-                                    .add_modifier(Modifier::ITALIC),
-                            )
-                        } else {
-                            Span::raw("")
-                        },
-                    ]));
-
-                    let visible_lines = if collapsed {
-                        thinking_lines
-                            .iter()
-                            .take(THINKING_PREVIEW_LINES)
-                            .copied()
-                            .collect::<Vec<_>>()
-                    } else {
-                        thinking_lines
-                    };
-
-                    for line in &visible_lines {
-                        all_lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(
-                                line.to_string(),
-                                Style::default()
-                                    .fg(Color::DarkGray)
-                                    .add_modifier(Modifier::ITALIC),
-                            ),
-                        ]));
-                    }
-                }
-                MessageEntry::System { text, severity } => {
-                    let (badge, badge_style) = match severity {
-                        SystemSeverity::Info => (
-                            " ℹ ",
-                            Style::default()
-                                .fg(Color::White)
-                                .bg(Color::Blue),
-                        ),
-                        SystemSeverity::Warning => (
-                            " ⚠ ",
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        SystemSeverity::Error => (
-                            " ✘ ",
-                            Style::default()
-                                .fg(Color::White)
-                                .bg(Color::Red)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    };
-                    let text_color = match severity {
-                        SystemSeverity::Info => Color::Blue,
-                        SystemSeverity::Warning => Color::Yellow,
-                        SystemSeverity::Error => Color::Red,
-                    };
-                    all_lines.push(Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled(badge, badge_style),
-                        Span::raw(" "),
-                        Span::styled(text.clone(), Style::default().fg(text_color)),
-                    ]));
-                }
-                MessageEntry::CompactBoundary { summary } => {
-                    all_lines.push(Line::from(""));
-                    all_lines.push(Line::from(Span::styled(
-                        format!(
-                            "─── Context compacted ─── {}",
-                            if summary.is_empty() {
-                                String::new()
-                            } else {
-                                format!("({})", summary)
-                            }
-                        ),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
-                    all_lines.push(Line::from(""));
-                }
-                MessageEntry::CommandOutput { command, output } => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            " $ ",
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            command.clone(),
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
-                    // Render output with bash syntax highlighting
-                    let highlighted = highlight_code_block("bash", output);
-                    for hl_line in highlighted {
-                        let mut spans = vec![Span::raw("    ")];
-                        spans.extend(
-                            hl_line
-                                .spans
-                                .into_iter()
-                                .map(|s| Span::styled(s.content.to_string(), s.style)),
-                        );
-                        all_lines.push(Line::from(spans));
-                    }
-                }
-                MessageEntry::ErrorRetry {
-                    attempt,
-                    max_attempts,
-                    wait_ms,
-                    error,
-                } => {
-                    let wait_str = if *wait_ms >= 1000 {
-                        format!("{:.1}s", *wait_ms as f64 / 1000.0)
-                    } else {
-                        format!("{}ms", wait_ms)
-                    };
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            " ↻ ",
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Rgb(255, 165, 0)) // Orange
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("Retry {}/{} in {}", attempt, max_attempts, wait_str),
-                            Style::default().fg(Color::Rgb(255, 165, 0)),
-                        ),
-                    ]));
-                    if !error.is_empty() {
-                        all_lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(
-                                error.clone(),
-                                Style::default()
-                                    .fg(Color::DarkGray)
-                                    .add_modifier(Modifier::ITALIC),
-                            ),
-                        ]));
-                    }
-                }
-                MessageEntry::RateLimitWarning {
-                    message,
-                    utilization,
-                } => {
-                    // Show utilization bar
-                    let bar_width = 20;
-                    let filled = ((utilization * bar_width as f64) as usize).min(bar_width);
-                    let empty = bar_width - filled;
-                    let bar_color = if *utilization > 0.8 {
-                        Color::Red
-                    } else if *utilization > 0.5 {
-                        Color::Yellow
-                    } else {
-                        Color::Green
-                    };
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            " ⚠ Rate Limit ",
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(message.clone(), Style::default().fg(Color::Yellow)),
-                    ]));
-                    all_lines.push(Line::from(vec![
-                        Span::raw("    "),
-                        Span::styled(
-                            "█".repeat(filled),
-                            Style::default().fg(bar_color),
-                        ),
-                        Span::styled(
-                            "░".repeat(empty),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::styled(
-                            format!(" {:.0}%", utilization * 100.0),
-                            Style::default().fg(bar_color),
-                        ),
-                    ]));
-                }
-                MessageEntry::PermissionRequest {
-                    tool,
-                    input_preview,
-                } => {
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            " 🔒 Permission ",
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            tool.clone(),
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
-                    if !input_preview.is_empty() {
-                        all_lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(
-                                input_preview.clone(),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                        ]));
-                    }
-                }
-                MessageEntry::AgentStatus {
-                    agent_id: _,
-                    name,
-                    status,
-                } => {
-                    let (icon, color) = match status.as_str() {
-                        "running" | "active" => ("●", Color::Yellow),
-                        "completed" | "done" => ("●", Color::Green),
-                        "error" | "failed" => ("●", Color::Red),
-                        _ => ("○", Color::DarkGray),
-                    };
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("{} ", icon),
-                            Style::default().fg(color),
-                        ),
-                        Span::styled(
-                            name.clone(),
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            status.clone(),
-                            Style::default().fg(color),
-                        ),
-                    ]));
-                }
-                MessageEntry::DiffPreview {
-                    file_path,
-                    additions,
-                    deletions,
-                    diff_text,
-                } => {
-                    // File header with +/- counts
-                    all_lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(
-                            file_path.clone(),
-                            Style::default()
-                                .fg(Color::White)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("+{}", additions),
-                            Style::default().fg(Color::Green),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("-{}", deletions),
-                            Style::default().fg(Color::Red),
-                        ),
-                    ]));
-
-                    // Render diff lines with coloring
-                    let diff_lines: Vec<&str> = diff_text.lines().collect();
-                    let visible = if is_expanded || diff_lines.len() <= COLLAPSE_THRESHOLD {
-                        &diff_lines[..]
-                    } else {
-                        &diff_lines[..COLLAPSE_THRESHOLD]
-                    };
-
-                    for line in visible {
-                        let style = if line.starts_with('+') {
-                            Style::default().fg(Color::Green)
-                        } else if line.starts_with('-') {
-                            Style::default().fg(Color::Red)
-                        } else if line.starts_with("@@") {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        };
-                        all_lines.push(Line::from(Span::styled(
-                            format!("    {}", line),
-                            style,
-                        )));
-                    }
-
-                    if !is_expanded && diff_lines.len() > COLLAPSE_THRESHOLD {
-                        let remaining = diff_lines.len() - COLLAPSE_THRESHOLD;
-                        all_lines.push(Line::from(Span::styled(
-                            format!("    ▸ {} more lines", remaining),
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        )));
-                    }
-                }
-            }
+            Self::render_message(
+                self.list,
+                msg,
+                msg_idx,
+                is_expanded,
+                search_highlight,
+                &mut all_lines,
+            );
         }
 
-        // Virtual scrolling
-        let total_lines = all_lines.len();
-        let visible_height = area.height as usize;
+        // Phase 5: Slice the rendered lines to the visible viewport.
+        // `all_lines` starts at line `first_msg_line_start`.
+        // We need lines from `scroll` to `scroll + visible_height`.
+        let local_scroll_start = scroll.saturating_sub(first_msg_line_start);
+        let local_scroll_end = (local_scroll_start + visible_height).min(all_lines.len());
 
-        let scroll = if self.list.sticky_bottom {
-            total_lines.saturating_sub(visible_height)
-        } else {
-            self.list
-                .scroll_offset
-                .min(total_lines.saturating_sub(visible_height))
-        };
-
-        // Count lines above and below the visible window
-        let lines_above = scroll;
-        let visible_end = total_lines.min(scroll + visible_height);
-        let lines_below = total_lines.saturating_sub(visible_end);
-
-        let visible = &all_lines[scroll..visible_end];
+        let visible = &all_lines[local_scroll_start..local_scroll_end];
         for (i, line) in visible.iter().enumerate() {
             let y = area.y + i as u16;
             if y >= area.y + area.height {
@@ -1146,11 +717,23 @@ impl<'a> Widget for MessageListWidget<'a> {
             buf.set_line(area.x, y, line, area.width);
         }
 
-        // Show "N more" indicators when scrolled
+        // Phase 6: Overlay indicators.
+        let lines_above = scroll;
+        let visible_end_line = (scroll + visible_height).min(total_lines);
+        let lines_below = total_lines.saturating_sub(visible_end_line);
+
         if lines_above > 0 && area.height > 0 {
-            let indicator = format!(" \u{25b2} {} more above ", lines_above);
+            let new_msg_hint = if self.list.new_messages_count > 0 {
+                format!(
+                    " \u{2191} {} new message{} ",
+                    self.list.new_messages_count,
+                    if self.list.new_messages_count == 1 { "" } else { "s" }
+                )
+            } else {
+                format!(" \u{25b2} {} more above ", lines_above)
+            };
             let indicator_line = Line::from(Span::styled(
-                indicator,
+                new_msg_hint,
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
@@ -1167,6 +750,587 @@ impl<'a> Widget for MessageListWidget<'a> {
             ));
             let bottom_y = area.y + area.height - 1;
             buf.set_line(area.x, bottom_y, &indicator_line, area.width);
+        }
+    }
+}
+
+impl<'a> MessageListWidget<'a> {
+    /// Render a single message entry into the given line buffer.
+    fn render_message(
+        list: &MessageList,
+        msg: &MessageEntry,
+        msg_idx: usize,
+        is_expanded: bool,
+        search_highlight: Option<Style>,
+        all_lines: &mut Vec<Line<'static>>,
+    ) {
+        match msg {
+            MessageEntry::User { text, images } => {
+                all_lines.push(Line::from(""));
+                all_lines.push(Line::from(vec![Span::styled(
+                    " You ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                )]));
+                let md_lines = render_markdown(text);
+                for md_line in md_lines {
+                    let mut spans = vec![Span::raw(" ")];
+                    spans.extend(md_line.spans.into_iter().map(|s| {
+                        if let Some(hl) = search_highlight {
+                            Span::styled(s.content.to_string(), s.style.patch(hl))
+                        } else {
+                            Span::styled(s.content.to_string(), s.style)
+                        }
+                    }));
+                    all_lines.push(Line::from(spans));
+                }
+                for img in images {
+                    all_lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("\u{1f4ce} {}", img),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
+            MessageEntry::Assistant { text } => {
+                all_lines.push(Line::from(""));
+                all_lines.push(Line::from(vec![Span::styled(
+                    " Claude ",
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )]));
+                let md_lines = render_markdown(text);
+                for md_line in md_lines {
+                    let mut spans = vec![Span::raw(" ")];
+                    spans.extend(md_line.spans.into_iter().map(|s| {
+                        if let Some(hl) = search_highlight {
+                            Span::styled(s.content.to_string(), s.style.patch(hl))
+                        } else {
+                            Span::styled(s.content.to_string(), s.style)
+                        }
+                    }));
+                    all_lines.push(Line::from(spans));
+                }
+                let is_last = msg_idx + 1 == list.messages.len();
+                if is_last && list.streaming {
+                    let cursor_char = if list.spinner_frame % 2 == 0 {
+                        "\u{2588}"
+                    } else {
+                        " "
+                    };
+                    all_lines.push(Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            cursor_char,
+                            Style::default().fg(Color::Green),
+                        ),
+                    ]));
+                }
+            }
+            MessageEntry::ToolUse {
+                id: _,
+                name,
+                input,
+                status,
+            } => {
+                let (status_indicator, status_color) = match status {
+                    ToolUseStatus::Pending => ("\u{25e6}", Color::DarkGray),
+                    ToolUseStatus::Running => {
+                        let frame = SPINNER_FRAMES[list.spinner_frame];
+                        (frame, Color::Yellow)
+                    }
+                    ToolUseStatus::Complete => ("\u{2714}", Color::Green),
+                    ToolUseStatus::Error => ("\u{2718}", Color::Red),
+                };
+
+                let mut tool_spans = vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{} ", status_indicator),
+                        Style::default()
+                            .fg(status_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {} ", name),
+                        Style::default().fg(Color::White).bg(Color::Magenta),
+                    ),
+                ];
+
+                if *status == ToolUseStatus::Running {
+                    tool_spans.push(Span::styled(
+                        " running...",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                }
+
+                all_lines.push(Line::from(tool_spans));
+
+                let input_str =
+                    serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
+                if is_expanded {
+                    let highlighted = highlight_code_block("json", &input_str);
+                    for hl_line in highlighted {
+                        let mut spans = vec![Span::raw("    ")];
+                        spans.extend(
+                            hl_line
+                                .spans
+                                .into_iter()
+                                .map(|s| Span::styled(s.content.to_string(), s.style)),
+                        );
+                        all_lines.push(Line::from(spans));
+                    }
+                } else {
+                    let compact = serde_json::to_string(input)
+                        .unwrap_or_else(|_| input.to_string());
+                    let summary = if compact.len() > 120 {
+                        format!("{}...", &compact[..117])
+                    } else {
+                        compact
+                    };
+                    all_lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(summary, Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+            }
+            MessageEntry::ToolResult {
+                id: _,
+                name,
+                output,
+                is_error,
+                duration_ms,
+            } => {
+                let indicator = if *is_error { "\u{2718}" } else { "\u{2714}" };
+                let color = if *is_error { Color::Red } else { Color::Green };
+                let label = if *is_error { "Error" } else { "Done" };
+
+                let mut result_spans = vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{} ", indicator),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{} ", label),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(
+                        name.clone(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ];
+
+                if let Some(ms) = duration_ms {
+                    let duration_text = if *ms >= 1000 {
+                        format!(" ({:.1}s)", *ms as f64 / 1000.0)
+                    } else {
+                        format!(" ({}ms)", ms)
+                    };
+                    result_spans.push(Span::styled(
+                        duration_text,
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+
+                all_lines.push(Line::from(result_spans));
+
+                let output_lines: Vec<&str> = output.lines().collect();
+                let show_all = is_expanded || output_lines.len() <= COLLAPSE_THRESHOLD;
+                let visible_count = if show_all {
+                    output_lines.len()
+                } else {
+                    COLLAPSE_THRESHOLD
+                };
+
+                let looks_like_json = output.trim_start().starts_with('{')
+                    || output.trim_start().starts_with('[');
+
+                if looks_like_json && !*is_error {
+                    let highlighted = highlight_code_block("json", output);
+                    for (i, hl_line) in highlighted.iter().enumerate() {
+                        if i >= visible_count {
+                            break;
+                        }
+                        let mut spans = vec![Span::raw("    ")];
+                        spans.extend(
+                            hl_line
+                                .spans
+                                .iter()
+                                .map(|s| Span::styled(s.content.to_string(), s.style)),
+                        );
+                        all_lines.push(Line::from(spans));
+                    }
+                } else {
+                    for line in output_lines.iter().take(visible_count) {
+                        let style = if *is_error {
+                            Style::default().fg(Color::Red)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        all_lines.push(Line::from(Span::styled(
+                            format!("    {}", line),
+                            style,
+                        )));
+                    }
+                }
+
+                if !show_all {
+                    let remaining = output_lines.len() - COLLAPSE_THRESHOLD;
+                    all_lines.push(Line::from(Span::styled(
+                        format!("    \u{25b8} {} more lines", remaining),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
+            }
+            MessageEntry::Thinking {
+                text,
+                is_collapsed,
+            } => {
+                let collapsed = *is_collapsed && !is_expanded;
+                let thinking_lines: Vec<&str> = text.lines().collect();
+
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "\u{1f4ad} thinking",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC | Modifier::BOLD),
+                    ),
+                    if collapsed && thinking_lines.len() > THINKING_PREVIEW_LINES {
+                        Span::styled(
+                            format!(
+                                "  \u{25b8} {} lines",
+                                thinking_lines.len()
+                            ),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        )
+                    } else {
+                        Span::raw("")
+                    },
+                ]));
+
+                let visible_lines = if collapsed {
+                    thinking_lines
+                        .iter()
+                        .take(THINKING_PREVIEW_LINES)
+                        .copied()
+                        .collect::<Vec<_>>()
+                } else {
+                    thinking_lines
+                };
+
+                for line in &visible_lines {
+                    all_lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
+            MessageEntry::System { text, severity } => {
+                let (badge, badge_style) = match severity {
+                    SystemSeverity::Info => (
+                        " \u{2139} ",
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::Blue),
+                    ),
+                    SystemSeverity::Warning => (
+                        " \u{26a0} ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    SystemSeverity::Error => (
+                        " \u{2718} ",
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                };
+                let text_color = match severity {
+                    SystemSeverity::Info => Color::Blue,
+                    SystemSeverity::Warning => Color::Yellow,
+                    SystemSeverity::Error => Color::Red,
+                };
+                all_lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(badge, badge_style),
+                    Span::raw(" "),
+                    Span::styled(text.clone(), Style::default().fg(text_color)),
+                ]));
+            }
+            MessageEntry::CompactBoundary { summary } => {
+                all_lines.push(Line::from(""));
+                all_lines.push(Line::from(Span::styled(
+                    format!(
+                        "\u{2500}\u{2500}\u{2500} Context compacted \u{2500}\u{2500}\u{2500} {}",
+                        if summary.is_empty() {
+                            String::new()
+                        } else {
+                            format!("({})", summary)
+                        }
+                    ),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+                all_lines.push(Line::from(""));
+            }
+            MessageEntry::CommandOutput { command, output } => {
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        " $ ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        command.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                let highlighted = highlight_code_block("bash", output);
+                for hl_line in highlighted {
+                    let mut spans = vec![Span::raw("    ")];
+                    spans.extend(
+                        hl_line
+                            .spans
+                            .into_iter()
+                            .map(|s| Span::styled(s.content.to_string(), s.style)),
+                    );
+                    all_lines.push(Line::from(spans));
+                }
+            }
+            MessageEntry::ErrorRetry {
+                attempt,
+                max_attempts,
+                wait_ms,
+                error,
+            } => {
+                let wait_str = if *wait_ms >= 1000 {
+                    format!("{:.1}s", *wait_ms as f64 / 1000.0)
+                } else {
+                    format!("{}ms", wait_ms)
+                };
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        " \u{21bb} ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Rgb(255, 165, 0))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("Retry {}/{} in {}", attempt, max_attempts, wait_str),
+                        Style::default().fg(Color::Rgb(255, 165, 0)),
+                    ),
+                ]));
+                if !error.is_empty() {
+                    all_lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            error.clone(),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
+            MessageEntry::RateLimitWarning {
+                message,
+                utilization,
+            } => {
+                let bar_width = 20;
+                let filled = ((utilization * bar_width as f64) as usize).min(bar_width);
+                let empty = bar_width - filled;
+                let bar_color = if *utilization > 0.8 {
+                    Color::Red
+                } else if *utilization > 0.5 {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                };
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        " \u{26a0} Rate Limit ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(message.clone(), Style::default().fg(Color::Yellow)),
+                ]));
+                all_lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        "\u{2588}".repeat(filled),
+                        Style::default().fg(bar_color),
+                    ),
+                    Span::styled(
+                        "\u{2591}".repeat(empty),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!(" {:.0}%", utilization * 100.0),
+                        Style::default().fg(bar_color),
+                    ),
+                ]));
+            }
+            MessageEntry::PermissionRequest {
+                tool,
+                input_preview,
+            } => {
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        " \u{1f512} Permission ",
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        tool.clone(),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                if !input_preview.is_empty() {
+                    all_lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(
+                            input_preview.clone(),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+            }
+            MessageEntry::AgentStatus {
+                agent_id: _,
+                name,
+                status,
+            } => {
+                let (icon, color) = match status.as_str() {
+                    "running" | "active" => ("\u{25cf}", Color::Yellow),
+                    "completed" | "done" => ("\u{25cf}", Color::Green),
+                    "error" | "failed" => ("\u{25cf}", Color::Red),
+                    _ => ("\u{25cb}", Color::DarkGray),
+                };
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{} ", icon),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(
+                        name.clone(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        status.clone(),
+                        Style::default().fg(color),
+                    ),
+                ]));
+            }
+            MessageEntry::DiffPreview {
+                file_path,
+                additions,
+                deletions,
+                diff_text,
+            } => {
+                all_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        file_path.clone(),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("+{}", additions),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("-{}", deletions),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]));
+
+                let diff_lines: Vec<&str> = diff_text.lines().collect();
+                let visible = if is_expanded || diff_lines.len() <= COLLAPSE_THRESHOLD {
+                    &diff_lines[..]
+                } else {
+                    &diff_lines[..COLLAPSE_THRESHOLD]
+                };
+
+                for line in visible {
+                    let style = if line.starts_with('+') {
+                        Style::default().fg(Color::Green)
+                    } else if line.starts_with('-') {
+                        Style::default().fg(Color::Red)
+                    } else if line.starts_with("@@") {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    all_lines.push(Line::from(Span::styled(
+                        format!("    {}", line),
+                        style,
+                    )));
+                }
+
+                if !is_expanded && diff_lines.len() > COLLAPSE_THRESHOLD {
+                    let remaining = diff_lines.len() - COLLAPSE_THRESHOLD;
+                    all_lines.push(Line::from(Span::styled(
+                        format!("    \u{25b8} {} more lines", remaining),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
+            }
         }
     }
 }

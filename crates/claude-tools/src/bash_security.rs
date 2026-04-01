@@ -605,7 +605,22 @@ impl ReadOnlyValidator {
                     }
                     continue;
                 }
+                // Numeric shorthand: -10 is equivalent to -n 10 in commands like git log.
+                if arg[1..].chars().all(|c| c.is_ascii_digit())
+                    && config.safe_flags.get("-n") == Some(&FlagArgType::NumberArg)
+                {
+                    i += 1;
+                    continue;
+                }
                 return false;
+            }
+
+            // Numeric shorthand: -10 is equivalent to -n 10 in commands like git log.
+            if arg[1..].chars().all(|c| c.is_ascii_digit())
+                && config.safe_flags.get("-n") == Some(&FlagArgType::NumberArg)
+            {
+                i += 1;
+                continue;
             }
 
             // Combined short flags (e.g., -nE).

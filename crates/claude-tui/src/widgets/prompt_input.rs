@@ -94,6 +94,10 @@ pub struct HistorySearchState {
     pub match_index: usize,
     /// Indices into the history Vec that match the current query.
     pub matches: Vec<usize>,
+    /// Lines saved when the search was activated, restored on Escape.
+    pub saved_lines: Vec<String>,
+    /// Cursor saved when the search was activated, restored on Escape.
+    pub saved_cursor: CursorPos,
 }
 
 impl HistorySearchState {
@@ -103,6 +107,8 @@ impl HistorySearchState {
             query: String::new(),
             match_index: 0,
             matches: Vec::new(),
+            saved_lines: vec![String::new()],
+            saved_cursor: CursorPos::new(0, 0),
         }
     }
 }
@@ -113,25 +119,151 @@ impl Default for HistorySearchState {
     }
 }
 
-/// Known slash commands with descriptions.
+/// Known slash commands with descriptions (sorted alphabetically).
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("/model", "Switch AI model"),
-    ("/clear", "Clear conversation"),
+    ("/add-dir", "Add a new working directory"),
+    ("/advisor", "Configure the advisor model"),
+    ("/agents", "Manage agent configurations"),
+    ("/branch", "Branch the conversation at this point"),
+    ("/brief", "Toggle brief-only mode"),
+    ("/btw", "Ask a quick side question without interrupting"),
+    ("/chrome", "Claude in Chrome (Beta) settings"),
+    ("/clear", "Clear conversation history"),
+    ("/color", "Set the prompt bar color for this session"),
+    ("/commit", "Create a git commit"),
+    ("/commit-push-pr", "Commit, push, and create a pull request"),
     ("/compact", "Compact conversation context"),
-    ("/resume", "Resume a previous session"),
-    ("/help", "Show help information"),
-    ("/config", "Open configuration"),
-    ("/vim", "Toggle vim mode"),
-    ("/theme", "Switch color theme"),
+    ("/config", "Show current configuration"),
+    ("/context", "Show context window usage"),
+    ("/copy", "Copy Claude's last response to clipboard"),
+    ("/cost", "Show the total cost and duration of the session"),
+    ("/ctx-viz", "Visualize context window usage as a colored grid"),
+    ("/desktop", "Continue the current session in Claude Desktop"),
+    ("/diff", "Show git diff for current project"),
+    ("/doctor", "Run diagnostic checks"),
+    ("/effort", "Set effort level for model usage"),
+    ("/env", "View or set environment variables"),
+    ("/exit", "Quit the application"),
+    ("/export", "Export conversation to file"),
+    ("/extra-usage", "Configure extra usage when limits are hit"),
+    ("/fast", "Toggle fast mode"),
+    ("/feedback", "Send feedback or report an issue"),
+    ("/files", "List all files currently in context"),
+    ("/heapdump", "Dump process diagnostics to ~/Desktop"),
+    ("/help", "Show available commands"),
+    ("/hooks", "View and manage hooks"),
+    ("/ide", "Manage IDE integrations and show status"),
+    ("/init", "Initialize project configuration"),
+    ("/install-github-app", "Set up Claude GitHub Actions for a repo"),
+    ("/install-slack-app", "Install the Claude Slack app"),
+    ("/keybindings", "View and customize keyboard shortcuts"),
+    ("/login", "Log in to your Anthropic account"),
+    ("/logout", "Log out and clear stored credentials"),
+    ("/mcp", "Manage MCP servers"),
+    ("/memory", "List CLAUDE.md memory files"),
+    ("/mobile", "Show QR code to download the Claude mobile app"),
+    ("/model", "Show or switch model"),
+    ("/passes", "Share a free week of Claude Code with friends"),
+    ("/permissions", "View and manage permission rules"),
     ("/plan", "Toggle plan mode"),
-    ("/commit", "Generate a commit message"),
-    ("/diff", "Show git diff"),
-    ("/review", "Review code changes"),
-    ("/cost", "Show session cost breakdown"),
-    ("/stats", "Show session statistics"),
-    ("/usage", "Show token usage"),
-    ("/quit", "Exit the application"),
+    ("/plugin", "Manage plugins"),
+    ("/pr", "Commit, push, and create a pull request"),
+    ("/pr-comments", "Get comments from a GitHub pull request"),
+    ("/privacy-settings", "View and update your privacy settings"),
+    ("/quit", "Quit the application"),
+    ("/rate-limit-options", "Show options when rate limit is reached"),
+    ("/release-notes", "View release notes"),
+    ("/reload-plugins", "Activate pending plugin changes"),
+    ("/remote-control", "Connect terminal for remote-control sessions"),
+    ("/remote-env", "Configure default remote environment"),
+    ("/rename", "Rename the current conversation"),
+    ("/resume", "Resume a previous session"),
+    ("/review", "Review a pull request"),
+    ("/rewind", "Restore code/conversation to a previous point"),
+    ("/sandbox", "Toggle sandbox mode for shell commands"),
+    ("/security-review", "Security review of pending changes"),
+    ("/session", "Show session info and remote URL"),
+    ("/share", "Share conversation transcript"),
+    ("/skills", "List available skills"),
+    ("/stats", "Show usage statistics and activity"),
+    ("/status", "Show session status"),
+    ("/stickers", "Order Claude Code stickers"),
+    ("/tag", "Toggle a searchable tag on the current session"),
+    ("/tasks", "View current task list"),
+    ("/terminal-setup", "Install Shift+Enter key binding for newlines"),
+    ("/theme", "Switch color theme"),
+    ("/think-back", "Your Claude Code Year in Review"),
+    ("/thinkback-play", "Play the thinkback animation"),
+    ("/upgrade", "Check for and install Claude Code updates"),
+    ("/usage", "Show token usage and cost"),
+    ("/version", "Show application version"),
+    ("/vim", "Toggle vim mode"),
+    ("/voice", "Toggle voice input mode"),
+    ("/web-setup", "Setup Claude Code on the web"),
 ];
+
+/// Match quality for fuzzy command matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchQuality {
+    /// Command starts with the query (best).
+    Prefix = 0,
+    /// Command contains the query as a substring.
+    Substring = 1,
+    /// All query characters appear in order in the command.
+    Fuzzy = 2,
+}
+
+/// Check if `haystack` contains all characters of `needle` in order (fuzzy match).
+fn fuzzy_matches(needle: &str, haystack: &str) -> bool {
+    let mut hay_chars = haystack.chars();
+    for nc in needle.chars() {
+        let nc_lower = nc.to_ascii_lowercase();
+        loop {
+            match hay_chars.next() {
+                Some(hc) if hc.to_ascii_lowercase() == nc_lower => break,
+                Some(_) => continue,
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
+/// Return matching slash commands for the given query, sorted by match quality.
+fn match_slash_commands(query: &str) -> Vec<CompletionItem> {
+    let query_lower = query.to_lowercase();
+    let mut matches: Vec<(MatchQuality, &str, &str)> = Vec::new();
+
+    for &(cmd, desc) in SLASH_COMMANDS {
+        let cmd_lower = cmd.to_lowercase();
+        let quality = if cmd_lower.starts_with(&query_lower) {
+            Some(MatchQuality::Prefix)
+        } else if cmd_lower.contains(&query_lower) {
+            Some(MatchQuality::Substring)
+        } else if fuzzy_matches(&query_lower, &cmd_lower) {
+            Some(MatchQuality::Fuzzy)
+        } else {
+            None
+        };
+        if let Some(q) = quality {
+            matches.push((q, cmd, desc));
+        }
+    }
+
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+
+    matches
+        .into_iter()
+        .map(|(_, cmd, desc)| CompletionItem {
+            label: cmd.to_string(),
+            insert: cmd.to_string(),
+            description: Some(desc.to_string()),
+        })
+        .collect()
+}
+
+/// Maximum number of history entries persisted to disk.
+const MAX_HISTORY_ENTRIES: usize = 1000;
 
 /// Multiline prompt input with history, completion, and history search.
 pub struct PromptInput {
@@ -151,12 +283,78 @@ pub struct PromptInput {
     pub history_search: HistorySearchState,
 }
 
+/// Return the path to the history file: `~/.claude/history.jsonl`
+fn history_file_path() -> Option<std::path::PathBuf> {
+    dirs_home().map(|h| std::path::PathBuf::from(h).join(".claude").join("history.jsonl"))
+}
+
+/// Load history from `~/.claude/history.jsonl` (one JSON object per line).
+fn load_history_from_disk() -> Vec<String> {
+    let Some(path) = history_file_path() else {
+        return Vec::new();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Each line is a JSON object: {"text":"...","timestamp":...,"cwd":"..."}
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(text) = obj.get("text").and_then(|v| v.as_str()) {
+                if !text.is_empty() {
+                    entries.push(text.to_string());
+                }
+            }
+        } else {
+            // Fallback: treat as plain text
+            entries.push(line.to_string());
+        }
+    }
+    // Keep only the last MAX_HISTORY_ENTRIES
+    if entries.len() > MAX_HISTORY_ENTRIES {
+        entries.drain(..entries.len() - MAX_HISTORY_ENTRIES);
+    }
+    entries
+}
+
+/// Append a single entry to `~/.claude/history.jsonl`.
+fn save_history_entry(text: &str) {
+    let Some(path) = history_file_path() else {
+        return;
+    };
+    // Ensure directory exists
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let entry = serde_json::json!({
+        "text": text,
+        "timestamp": timestamp,
+        "cwd": cwd,
+    });
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}", entry);
+    }
+}
+
 impl PromptInput {
     pub fn new() -> Self {
+        let history = load_history_from_disk();
         Self {
             lines: vec![String::new()],
             cursor: CursorPos::new(0, 0),
-            history: Vec::new(),
+            history,
             history_index: None,
             saved_current: vec![String::new()],
             completion: None,
@@ -266,6 +464,12 @@ impl PromptInput {
         let submitted = self.text();
         if !submitted.is_empty() {
             self.history.push(submitted.clone());
+            // Persist to ~/.claude/history.jsonl
+            save_history_entry(&submitted);
+            // Trim in-memory history to limit
+            if self.history.len() > MAX_HISTORY_ENTRIES {
+                self.history.drain(..self.history.len() - MAX_HISTORY_ENTRIES);
+            }
         }
         self.lines = vec![String::new()];
         self.cursor = CursorPos::new(0, 0);
@@ -274,11 +478,10 @@ impl PromptInput {
         submitted
     }
 
-    /// Undo placeholder — full undo stack to be added later.
+    /// Undo placeholder.
     pub fn undo(&mut self) {}
 
     /// Select all text: move cursor to end of last line.
-    /// For Cmd+A on macOS, this selects the full buffer.
     pub fn select_all(&mut self) {
         let last_row = self.lines.len().saturating_sub(1);
         self.cursor = CursorPos::new(last_row, self.lines[last_row].len());
@@ -331,19 +534,15 @@ impl PromptInput {
 
         match (key.modifiers, key.code) {
             // ---- Submit shortcuts ----
-            // Ctrl+Enter always submits
             (KeyModifiers::CONTROL, KeyCode::Enter) if !self.is_empty() => {
                 InputAction::Submit(self.submit())
             }
-            // Shift+Enter submits (Option+Enter maps the same on many terminals)
             (KeyModifiers::SHIFT, KeyCode::Enter) if !self.is_empty() => {
                 InputAction::Submit(self.submit())
             }
-            // Alt+Enter submits
             (KeyModifiers::ALT, KeyCode::Enter) if !self.is_empty() => {
                 InputAction::Submit(self.submit())
             }
-            // Plain Enter: if single-line and non-empty, submit; otherwise insert newline
             (_, KeyCode::Enter) if key.modifiers.is_empty() => {
                 if self.lines.len() == 1 && !self.is_empty() {
                     InputAction::Submit(self.submit())
@@ -369,35 +568,12 @@ impl PromptInput {
             (_, KeyCode::Char(c))
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                // Any editing resets history navigation — user is now editing
-                // a new/modified entry, not browsing history
                 if self.history_index.is_some() {
                     self.history_index = None;
                 }
                 self.insert_char(c);
-                // Auto-trigger slash command completion when typing '/' at start of line
-                let current_line = &self.lines[self.cursor.row];
-                let before_cursor = &current_line[..self.cursor.col];
-                if before_cursor.starts_with('/') && self.cursor.row == 0 {
-                    // Refresh slash command suggestions as user types
-                    let query = before_cursor;
-                    let items: Vec<CompletionItem> = SLASH_COMMANDS
-                        .iter()
-                        .filter(|(cmd, _)| cmd.starts_with(query))
-                        .map(|(cmd, desc)| CompletionItem {
-                            label: cmd.to_string(),
-                            insert: cmd.to_string(),
-                            description: Some(desc.to_string()),
-                        })
-                        .collect();
-                    if !items.is_empty() {
-                        self.completion = Some(CompletionState::new(items, 0));
-                    } else {
-                        self.completion = None;
-                    }
-                } else {
-                    self.completion = None;
-                }
+                // Auto-trigger slash command completion when typing at start of line
+                self.refresh_slash_completion();
                 InputAction::None
             }
 
@@ -405,7 +581,8 @@ impl PromptInput {
             (_, KeyCode::Backspace) => {
                 if self.history_index.is_some() { self.history_index = None; }
                 self.backspace();
-                self.completion = None;
+                // Re-trigger completion after backspace if still in a slash command
+                self.refresh_slash_completion();
                 InputAction::None
             }
 
@@ -428,11 +605,9 @@ impl PromptInput {
             }
             (_, KeyCode::Up) if key.modifiers.is_empty() => {
                 if self.cursor.row > 0 {
-                    // Move up within multiline buffer
                     self.cursor.row -= 1;
                     self.cursor.col = self.cursor.col.min(self.lines[self.cursor.row].len());
                 } else {
-                    // At top line — browse history
                     self.history_prev();
                 }
                 InputAction::None
@@ -447,7 +622,7 @@ impl PromptInput {
                 InputAction::None
             }
 
-            // ---- Word navigation: Alt+Left/Right and Ctrl+Left/Right ----
+            // ---- Word navigation ----
             (KeyModifiers::ALT, KeyCode::Left)
             | (KeyModifiers::CONTROL, KeyCode::Left) => {
                 self.move_word_left();
@@ -459,48 +634,35 @@ impl PromptInput {
                 InputAction::None
             }
 
-            // ---- Ctrl+A — beginning of line ----
             (KeyModifiers::CONTROL, KeyCode::Char('a')) => {
                 self.cursor.col = 0;
                 InputAction::None
             }
-            // ---- Ctrl+E — end of line ----
             (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
                 self.cursor.col = self.lines[self.cursor.row].len();
                 InputAction::None
             }
-
-            // ---- Ctrl+K — kill to end of line ----
             (KeyModifiers::CONTROL, KeyCode::Char('k')) => {
                 self.lines[self.cursor.row].truncate(self.cursor.col);
                 InputAction::None
             }
-            // ---- Ctrl+U — kill to start of line ----
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
                 let rest = self.lines[self.cursor.row][self.cursor.col..].to_string();
                 self.lines[self.cursor.row] = rest;
                 self.cursor.col = 0;
                 InputAction::None
             }
-            // ---- Ctrl+W — delete word backward ----
             (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
                 self.delete_word_backward();
                 InputAction::None
             }
 
-            // ---- Home/End ----
             (_, KeyCode::Home) => {
                 self.cursor.col = 0;
                 InputAction::None
             }
             (_, KeyCode::End) => {
                 self.cursor.col = self.lines[self.cursor.row].len();
-                InputAction::None
-            }
-
-            // ---- Ctrl+R — reverse history search ----
-            (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
-                self.start_history_search();
                 InputAction::None
             }
 
@@ -512,14 +674,12 @@ impl PromptInput {
     // Multiline editing operations
     // -----------------------------------------------------------------------
 
-    /// Insert a character at the current cursor position.
     fn insert_char(&mut self, c: char) {
         let line = &mut self.lines[self.cursor.row];
         line.insert(self.cursor.col, c);
         self.cursor.col += c.len_utf8();
     }
 
-    /// Insert a newline at the current cursor position (splitting the line).
     fn insert_newline(&mut self) {
         let rest = self.lines[self.cursor.row][self.cursor.col..].to_string();
         self.lines[self.cursor.row].truncate(self.cursor.col);
@@ -528,7 +688,6 @@ impl PromptInput {
         self.cursor.col = 0;
     }
 
-    /// Delete the character before the cursor (backspace).
     fn backspace(&mut self) {
         if self.cursor.col > 0 {
             let prev_len = self.lines[self.cursor.row][..self.cursor.col]
@@ -537,11 +696,9 @@ impl PromptInput {
                 .map(|c| c.len_utf8())
                 .unwrap_or(0);
             self.cursor.col -= prev_len;
-            // Remove the full character (may be multi-byte for UTF-8)
             let end = self.cursor.col + prev_len;
             self.lines[self.cursor.row].replace_range(self.cursor.col..end, "");
         } else if self.cursor.row > 0 {
-            // Join with previous line
             let current = self.lines.remove(self.cursor.row);
             self.cursor.row -= 1;
             self.cursor.col = self.lines[self.cursor.row].len();
@@ -549,11 +706,9 @@ impl PromptInput {
         }
     }
 
-    /// Delete the character at the cursor (Delete key).
     fn delete_forward(&mut self) {
         let line_len = self.lines[self.cursor.row].len();
         if self.cursor.col < line_len {
-            // Find the length of the character at cursor (may be multi-byte)
             let char_len = self.lines[self.cursor.row][self.cursor.col..]
                 .chars()
                 .next()
@@ -562,13 +717,11 @@ impl PromptInput {
             let end = (self.cursor.col + char_len).min(line_len);
             self.lines[self.cursor.row].replace_range(self.cursor.col..end, "");
         } else if self.cursor.row + 1 < self.lines.len() {
-            // Join next line into current
             let next = self.lines.remove(self.cursor.row + 1);
             self.lines[self.cursor.row].push_str(&next);
         }
     }
 
-    /// Move cursor one character left.
     fn move_left(&mut self) {
         if self.cursor.col > 0 {
             let prev_len = self.lines[self.cursor.row][..self.cursor.col]
@@ -583,7 +736,6 @@ impl PromptInput {
         }
     }
 
-    /// Move cursor one character right.
     fn move_right(&mut self) {
         let line_len = self.lines[self.cursor.row].len();
         if self.cursor.col < line_len {
@@ -599,7 +751,6 @@ impl PromptInput {
         }
     }
 
-    /// Move cursor one word left.
     fn move_word_left(&mut self) {
         if self.cursor.col == 0 {
             if self.cursor.row > 0 {
@@ -611,18 +762,15 @@ impl PromptInput {
 
         let line = &self.lines[self.cursor.row];
         let before = &line[..self.cursor.col];
-        // Skip whitespace, then skip word chars
         let trimmed = before.trim_end();
         if trimmed.is_empty() {
             self.cursor.col = 0;
             return;
         }
-        // Find start of previous word
         let last_word_end = trimmed.len();
         let word_start = trimmed
             .rfind(|c: char| c.is_whitespace() || !c.is_alphanumeric() && c != '_')
             .map(|i| {
-                // i is the index of the non-word char, we want the char after it
                 let nc = i + trimmed[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                 if nc >= last_word_end { i } else { nc }
             })
@@ -630,7 +778,6 @@ impl PromptInput {
         self.cursor.col = word_start;
     }
 
-    /// Move cursor one word right.
     fn move_word_right(&mut self) {
         let line = &self.lines[self.cursor.row];
         if self.cursor.col >= line.len() {
@@ -642,17 +789,14 @@ impl PromptInput {
         }
 
         let after = &line[self.cursor.col..];
-        // Skip current word chars, then skip whitespace
         let mut pos = 0;
         let mut chars = after.chars();
-        // Skip non-whitespace
         for c in chars.by_ref() {
             if c.is_whitespace() {
                 break;
             }
             pos += c.len_utf8();
         }
-        // Skip whitespace
         for c in chars {
             if !c.is_whitespace() {
                 break;
@@ -660,7 +804,6 @@ impl PromptInput {
             pos += c.len_utf8();
         }
         if pos == 0 {
-            // We were already at whitespace, skip it
             let mut chars2 = after.chars();
             for c in chars2.by_ref() {
                 if !c.is_whitespace() {
@@ -672,14 +815,12 @@ impl PromptInput {
         self.cursor.col = (self.cursor.col + pos).min(line.len());
     }
 
-    /// Delete one word backward (Ctrl+W).
     fn delete_word_backward(&mut self) {
         if self.cursor.col == 0 {
             return;
         }
         let line = &self.lines[self.cursor.row];
         let before = &line[..self.cursor.col];
-        // Skip trailing whitespace
         let trimmed = before.trim_end();
         let word_boundary = if trimmed.is_empty() {
             0
@@ -741,11 +882,14 @@ impl PromptInput {
     // Reverse history search (Ctrl+R)
     // -----------------------------------------------------------------------
 
-    fn start_history_search(&mut self) {
+    pub fn start_history_search(&mut self) {
+        self.history_search.saved_lines = self.lines.clone();
+        self.history_search.saved_cursor = self.cursor;
         self.history_search.active = true;
         self.history_search.query.clear();
         self.history_search.match_index = 0;
         self.update_history_search_matches();
+        self.preview_history_search_match();
     }
 
     fn update_history_search_matches(&mut self) {
@@ -754,7 +898,7 @@ impl PromptInput {
             .history
             .iter()
             .enumerate()
-            .rev() // Most recent first
+            .rev()
             .filter(|(_, entry)| {
                 if query.is_empty() {
                     true
@@ -764,7 +908,6 @@ impl PromptInput {
             })
             .map(|(i, _)| i)
             .collect();
-        // Clamp match_index
         if self.history_search.match_index >= self.history_search.matches.len() {
             self.history_search.match_index = 0;
         }
@@ -773,34 +916,58 @@ impl PromptInput {
     fn handle_history_search_key(&mut self, key: KeyEvent) -> InputAction {
         match key.code {
             KeyCode::Esc => {
-                // Cancel search, restore original input
+                self.lines = self.history_search.saved_lines.clone();
+                self.cursor = self.history_search.saved_cursor;
                 self.history_search.active = false;
                 InputAction::None
             }
             KeyCode::Enter => {
-                // Accept the matched entry and place it in the input
-                if let Some(&hist_idx) = self
-                    .history_search
-                    .matches
-                    .get(self.history_search.match_index)
-                {
-                    let entry = self.history[hist_idx].clone();
-                    self.set_lines_from_string(&entry);
-                    let last_row = self.lines.len() - 1;
-                    self.cursor = CursorPos::new(last_row, self.lines[last_row].len());
-                }
                 self.history_search.active = false;
                 InputAction::None
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Cycle to next match
                 if !self.history_search.matches.is_empty() {
                     self.history_search.match_index =
                         (self.history_search.match_index + 1) % self.history_search.matches.len();
+                    self.preview_history_search_match();
+                }
+                InputAction::None
+            }
+            KeyCode::Down => {
+                if !self.history_search.matches.is_empty() {
+                    self.history_search.match_index =
+                        (self.history_search.match_index + 1) % self.history_search.matches.len();
+                    self.preview_history_search_match();
+                }
+                InputAction::None
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.history_search.matches.is_empty() {
+                    self.history_search.match_index =
+                        if self.history_search.match_index == 0 {
+                            self.history_search.matches.len() - 1
+                        } else {
+                            self.history_search.match_index - 1
+                        };
+                    self.preview_history_search_match();
+                }
+                InputAction::None
+            }
+            KeyCode::Up => {
+                if !self.history_search.matches.is_empty() {
+                    self.history_search.match_index =
+                        if self.history_search.match_index == 0 {
+                            self.history_search.matches.len() - 1
+                        } else {
+                            self.history_search.match_index - 1
+                        };
+                    self.preview_history_search_match();
                 }
                 InputAction::None
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.lines = self.history_search.saved_lines.clone();
+                self.cursor = self.history_search.saved_cursor;
                 self.history_search.active = false;
                 InputAction::None
             }
@@ -808,6 +975,7 @@ impl PromptInput {
                 self.history_search.query.pop();
                 self.history_search.match_index = 0;
                 self.update_history_search_matches();
+                self.preview_history_search_match();
                 InputAction::None
             }
             KeyCode::Char(c)
@@ -816,9 +984,26 @@ impl PromptInput {
                 self.history_search.query.push(c);
                 self.history_search.match_index = 0;
                 self.update_history_search_matches();
+                self.preview_history_search_match();
                 InputAction::None
             }
             _ => InputAction::None,
+        }
+    }
+
+    fn preview_history_search_match(&mut self) {
+        if let Some(&hist_idx) = self
+            .history_search
+            .matches
+            .get(self.history_search.match_index)
+        {
+            let entry = self.history[hist_idx].clone();
+            self.set_lines_from_string(&entry);
+            let last_row = self.lines.len() - 1;
+            self.cursor = CursorPos::new(last_row, self.lines[last_row].len());
+        } else {
+            self.lines = self.history_search.saved_lines.clone();
+            self.cursor = self.history_search.saved_cursor;
         }
     }
 
@@ -838,24 +1023,40 @@ impl PromptInput {
     // Tab completion
     // -----------------------------------------------------------------------
 
-    /// Trigger tab completion or cycle through existing completions.
+    /// Refresh slash command completion based on current input.
+    /// Called after character input and backspace to keep the popup in sync.
+    fn refresh_slash_completion(&mut self) {
+        let current_line = &self.lines[self.cursor.row];
+        let before_cursor = &current_line[..self.cursor.col];
+        if before_cursor.starts_with('/') && self.cursor.row == 0 {
+            let items = match_slash_commands(before_cursor);
+            if !items.is_empty() {
+                self.completion = Some(CompletionState::new(items, 0));
+            } else {
+                self.completion = None;
+            }
+        } else {
+            self.completion = None;
+        }
+    }
+
     /// Handle a key while the completion popup is visible.
     /// Returns `Some(action)` if consumed, `None` to pass through.
     fn handle_completion_key(&mut self, key: &KeyEvent) -> Option<InputAction> {
         match key.code {
             KeyCode::Tab => {
+                // Accept the selected completion and dismiss popup
+                self.accept_completion();
+                Some(InputAction::None)
+            }
+            KeyCode::BackTab => {
                 if let Some(ref mut state) = self.completion {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) {
-                        state.prev();
-                    } else {
-                        state.next();
-                    }
+                    state.prev();
                 }
                 Some(InputAction::None)
             }
             KeyCode::Enter => {
                 self.accept_completion();
-                // If the accepted text is a complete slash command, submit it
                 let text = self.text();
                 if text.starts_with('/') && SLASH_COMMANDS.iter().any(|(cmd, _)| *cmd == text) {
                     Some(InputAction::Submit(self.submit()))
@@ -885,7 +1086,7 @@ impl PromptInput {
 
     fn trigger_or_cycle_completion(&mut self, backward: bool) {
         if let Some(ref mut state) = self.completion {
-            // Already showing completions — cycle
+            // Already showing completions -- cycle
             if backward {
                 state.prev();
             } else {
@@ -899,19 +1100,8 @@ impl PromptInput {
         let before = &line[..self.cursor.col];
 
         let items = if before.starts_with('/') {
-            // Slash command completion
-            let query = before;
-            SLASH_COMMANDS
-                .iter()
-                .filter(|(cmd, _)| cmd.starts_with(query))
-                .map(|(cmd, desc)| CompletionItem {
-                    label: cmd.to_string(),
-                    insert: cmd.to_string(),
-                    description: Some(desc.to_string()),
-                })
-                .collect::<Vec<_>>()
+            match_slash_commands(before)
         } else {
-            // File path completion: look for a path-like token
             let token_start = before
                 .rfind(|c: char| c.is_whitespace())
                 .map(|i| i + 1)
@@ -948,8 +1138,6 @@ impl PromptInput {
             }
         }
     }
-
-    // NOTE: handle_completion_key is defined above (near trigger_or_cycle_completion)
 
     /// Attempt file path completion for a given token.
     fn complete_file_path(&self, token: &str, _token_start: usize) -> Vec<CompletionItem> {
@@ -992,7 +1180,6 @@ impl PromptInput {
                             .unwrap_or("");
                         format!("{}{}", parent_token, name_str)
                     };
-                    // Append '/' for directories
                     if entry.path().is_dir() && !full.ends_with('/') {
                         full.push('/');
                     }
@@ -1009,7 +1196,6 @@ impl PromptInput {
             }
         }
         items.sort_by(|a, b| a.label.cmp(&b.label));
-        // Limit to avoid huge popups
         items.truncate(20);
         items
     }
@@ -1025,19 +1211,16 @@ impl PromptInput {
         }
         let paste_lines: Vec<&str> = pasted.split('\n').collect();
         if paste_lines.len() == 1 {
-            // Single line paste
             let line = &mut self.lines[self.cursor.row];
             line.insert_str(self.cursor.col, paste_lines[0]);
             self.cursor.col += paste_lines[0].len();
         } else {
-            // Multiline paste
             let rest = self.lines[self.cursor.row][self.cursor.col..].to_string();
             self.lines[self.cursor.row].truncate(self.cursor.col);
             self.lines[self.cursor.row].push_str(paste_lines[0]);
 
             for (i, paste_line) in paste_lines.iter().enumerate().skip(1) {
                 if i == paste_lines.len() - 1 {
-                    // Last line: append the rest of the original line
                     let new_line = format!("{}{}", paste_line, rest);
                     self.cursor.row += 1;
                     self.cursor.col = paste_line.len();
@@ -1054,7 +1237,6 @@ impl PromptInput {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    /// Set the lines buffer from a single string (splitting on newlines).
     fn set_lines_from_string(&mut self, s: &str) {
         self.lines = s.split('\n').map(String::from).collect();
         if self.lines.is_empty() {
@@ -1062,14 +1244,13 @@ impl PromptInput {
         }
     }
 
-    /// Convert a flat byte offset to (row, col).
     fn flat_to_pos(&self, flat: usize) -> (usize, usize) {
         let mut remaining = flat;
         for (i, line) in self.lines.iter().enumerate() {
             if remaining <= line.len() || i == self.lines.len() - 1 {
                 return (i, remaining.min(line.len()));
             }
-            remaining -= line.len() + 1; // +1 for the '\n'
+            remaining -= line.len() + 1;
         }
         let last = self.lines.len() - 1;
         (last, self.lines[last].len())
@@ -1088,7 +1269,7 @@ fn dirs_home() -> Option<String> {
 }
 
 // ===========================================================================
-// Widget: PromptInputWidget — renders the multiline input area
+// Widget: PromptInputWidget
 // ===========================================================================
 
 pub struct PromptInputWidget<'a> {
@@ -1165,7 +1346,6 @@ impl<'a> Widget for PromptInputWidget<'a> {
                     .add_modifier(Modifier::BOLD),
             );
             let mode_line = Line::from(vec![mode_span]);
-            // Render at right side of last line, or on the border line
             let mode_y = inner.y + inner.height.saturating_sub(1);
             let mode_x = inner.x + inner.width.saturating_sub(mode_str.len() as u16);
             buf.set_line(mode_x, mode_y, &mode_line, mode_str.len() as u16);
@@ -1183,12 +1363,10 @@ impl<'a> Widget for PromptInputWidget<'a> {
             return;
         }
 
-        // We show as many lines as fit in the area, scrolled so the cursor is visible
         let max_visible_lines = inner.height as usize;
         let total_lines = self.input.lines.len();
         let cursor_row = self.input.cursor.row;
 
-        // Compute scroll offset so cursor row is visible
         let scroll_offset = if cursor_row >= max_visible_lines {
             cursor_row - max_visible_lines + 1
         } else {
@@ -1206,13 +1384,12 @@ impl<'a> Widget for PromptInputWidget<'a> {
 
             let line_text = &self.input.lines[line_idx];
 
-            // Only the first visible line gets the "> " prompt
             let prefix = if line_idx == 0 && scroll_offset == 0 {
                 prompt_str
             } else if line_idx == 0 {
-                "> " // still show prompt for the first line even if scrolled
+                "> "
             } else {
-                "  " // continuation indent
+                "  "
             };
 
             let spans = vec![
@@ -1222,9 +1399,6 @@ impl<'a> Widget for PromptInputWidget<'a> {
             let line = Line::from(spans);
             buf.set_line(inner.x, y, &line, inner.width);
         }
-
-        // NOTE: Completion popup is rendered in app.rs above the input area
-        // so it doesn't get clipped by the small input widget bounds.
     }
 }
 
@@ -1265,16 +1439,12 @@ mod tests {
     #[test]
     fn test_multiline_enter_inserts_newline() {
         let mut p = PromptInput::new();
-        // Type something, then press Enter to submit (single line)
         p.handle_key(key(KeyCode::Char('a')));
-        // To get multiline, we first need at least 2 lines.
-        // Let's use insert_newline directly.
         p.insert_newline();
         p.handle_key(key(KeyCode::Char('b')));
         assert_eq!(p.text(), "a\nb");
         assert_eq!(p.line_count(), 2);
 
-        // Ctrl+Enter submits multiline
         let result = p.handle_key(key_mod(KeyCode::Enter, KeyModifiers::CONTROL));
         assert!(matches!(result, InputAction::Submit(ref s) if s == "a\nb"));
     }
@@ -1283,8 +1453,7 @@ mod tests {
     fn test_cursor_flat_offset() {
         let mut p = PromptInput::new();
         p.lines = vec!["hello".to_string(), "world".to_string()];
-        p.cursor = CursorPos::new(1, 3); // "wor|ld"
-        // Flat offset: "hello\n" = 6, + 3 = 9
+        p.cursor = CursorPos::new(1, 3);
         assert_eq!(p.cursor(), 9);
     }
 
@@ -1292,7 +1461,7 @@ mod tests {
     fn test_set_cursor_flat() {
         let mut p = PromptInput::new();
         p.lines = vec!["abc".to_string(), "de".to_string(), "f".to_string()];
-        p.set_cursor(5); // "abc\nd|e" -> row=1, col=1
+        p.set_cursor(5);
         assert_eq!(p.cursor_pos(), CursorPos::new(1, 1));
     }
 
@@ -1326,12 +1495,10 @@ mod tests {
         p.start_history_search();
         assert!(p.history_search.active);
 
-        // Type "first" to filter
         for c in "first".chars() {
             p.handle_key(key(KeyCode::Char(c)));
         }
         assert_eq!(p.history_search.matches.len(), 2);
-        // First match should be most recent "first again"
         let current = p.history_search_current_match().unwrap();
         assert_eq!(current, "first again");
     }
@@ -1353,10 +1520,53 @@ mod tests {
         let mut p = PromptInput::new();
         p.handle_key(key(KeyCode::Char('/')));
         p.handle_key(key(KeyCode::Char('m')));
-        // Now trigger completion
         p.trigger_or_cycle_completion(false);
         assert!(p.completion.is_some());
         let comp = p.completion.as_ref().unwrap();
         assert!(comp.items.iter().any(|i| i.label == "/model"));
+    }
+
+    #[test]
+    fn test_fuzzy_matching() {
+        // "/cmt" should fuzzy-match "/commit"
+        let items = match_slash_commands("/cmt");
+        assert!(items.iter().any(|i| i.label == "/commit"));
+
+        // "/com" should prefix-match "/commit", "/compact", etc.
+        let items = match_slash_commands("/com");
+        assert!(items.iter().any(|i| i.label == "/commit"));
+        assert!(items.iter().any(|i| i.label == "/compact"));
+
+        // "/rv" should fuzzy-match "/review" and "/rewind"
+        let items = match_slash_commands("/rv");
+        assert!(items.iter().any(|i| i.label == "/review"));
+
+        // "/" should match everything
+        let items = match_slash_commands("/");
+        assert_eq!(items.len(), SLASH_COMMANDS.len());
+    }
+
+    #[test]
+    fn test_fuzzy_match_quality_ordering() {
+        // "/mo" should have prefix matches first
+        let items = match_slash_commands("/mo");
+        assert!(!items.is_empty());
+        assert_eq!(items[0].label, "/mobile");
+        assert!(items.iter().any(|i| i.label == "/model"));
+    }
+
+    #[test]
+    fn test_tab_accepts_completion() {
+        let mut p = PromptInput::new();
+        p.handle_key(key(KeyCode::Char('/')));
+        p.handle_key(key(KeyCode::Char('q')));
+        // Completion should be auto-triggered
+        assert!(p.completion.is_some());
+        // Tab should accept the selected completion
+        p.handle_key(key(KeyCode::Tab));
+        // Completion should be dismissed after accepting
+        assert!(p.completion.is_none());
+        // Text should be the accepted command
+        assert_eq!(p.text(), "/quit");
     }
 }

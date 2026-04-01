@@ -34,6 +34,8 @@ mod help;
 mod hooks;
 mod ide;
 mod init;
+mod insights;
+mod install;
 mod install_github_app;
 mod install_slack_app;
 mod keybindings;
@@ -42,6 +44,7 @@ mod mcp;
 mod memory;
 mod mobile;
 mod model;
+mod output_style;
 mod passes;
 mod permissions;
 mod plan;
@@ -61,6 +64,7 @@ mod rewind;
 mod sandbox;
 mod session;
 mod share;
+mod statusline;
 mod skills;
 mod stats;
 mod status;
@@ -70,6 +74,7 @@ mod tasks;
 mod terminal_setup;
 mod theme;
 mod thinkback;
+mod ultraplan;
 mod thinkback_play;
 mod upgrade;
 mod usage;
@@ -243,7 +248,9 @@ impl CommandRegistry {
         reg.register(Box::new(color::ColorCommand));
         reg.register(Box::new(fast::FastCommand));
         reg.register(Box::new(env::EnvCommand));
+        reg.register(Box::new(output_style::OutputStyleCommand));
         reg.register(Box::new(plan::PlanCommand));
+        reg.register(Box::new(ultraplan::UltraplanCommand));
         reg.register(Box::new(vim::VimCommand));
         reg.register(Box::new(voice::VoiceCommand));
         reg.register(Box::new(privacy_settings::PrivacySettingsCommand));
@@ -259,6 +266,7 @@ impl CommandRegistry {
 
         // Info commands
         reg.register(Box::new(status::StatusCommand));
+        reg.register(Box::new(statusline::StatuslineCommand));
         reg.register(Box::new(usage::UsageCommand));
         reg.register(Box::new(cost::CostCommand));
         reg.register(Box::new(context::ContextCommand));
@@ -272,6 +280,7 @@ impl CommandRegistry {
 
         // Project commands
         reg.register(Box::new(init::InitCommand));
+        reg.register(Box::new(install::InstallCommand));
         reg.register(Box::new(feedback::FeedbackCommand));
         reg.register(Box::new(add_dir::AddDirCommand));
 
@@ -287,6 +296,7 @@ impl CommandRegistry {
         reg.register(Box::new(advisor::AdvisorCommand));
 
         // Info and utility commands
+        reg.register(Box::new(insights::InsightsCommand));
         reg.register(Box::new(stats::StatsCommand));
         reg.register(Box::new(upgrade::UpgradeCommand));
         reg.register(Box::new(stickers::StickersCommand));

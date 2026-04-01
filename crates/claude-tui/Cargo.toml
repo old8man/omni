@@ -19,6 +19,7 @@ unicode-width = "0.2"
 unicode-segmentation = "1"
 htmlescape = "0.3"
 copypasta = { version = "0.10", default-features = false, features = ["wayland", "x11"] }
+tempfile = "3"
 
 [features]
 default = ["claude-core/default"]

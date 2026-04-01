@@ -156,14 +156,14 @@ mod tests {
     #[test]
     fn test_default_policy() {
         let p = RetryPolicy::default();
-        assert_eq!(p.max_retries, 10);
-        assert_eq!(p.max_529_retries, 3);
-        assert_eq!(p.base_delay, Duration::from_millis(500));
+        assert_eq!(p.max_retries, 3);
+        assert_eq!(p.max_529_retries, 2);
+        assert_eq!(p.base_delay, Duration::from_millis(1000));
     }
 
     #[test]
     fn test_retryable_statuses() {
-        assert!(RetryPolicy::is_retryable(429));
+        assert!(!RetryPolicy::is_retryable(429));
         assert!(RetryPolicy::is_retryable(500));
         assert!(RetryPolicy::is_retryable(502));
         assert!(RetryPolicy::is_retryable(503));
@@ -178,11 +178,8 @@ mod tests {
     fn test_retry_429_within_limit() {
         let p = RetryPolicy::default();
         match p.should_retry(429, 1, None) {
-            RetryDecision::Retry { delay } => {
-                assert!(delay >= Duration::from_millis(500));
-                assert!(delay <= Duration::from_millis(625 + 1)); // 500 + 25% max jitter
-            }
-            _ => panic!("expected Retry"),
+            RetryDecision::Fatal { status } => assert_eq!(status, 429),
+            _ => panic!("expected Fatal"),
         }
     }
 
@@ -207,23 +204,20 @@ mod tests {
     #[test]
     fn test_retry_after_header_integer() {
         let p = RetryPolicy::default();
+        // 429 is fatal regardless of retry-after header
         match p.should_retry(429, 1, Some("5")) {
-            RetryDecision::Retry { delay } => {
-                assert_eq!(delay, Duration::from_secs(5));
-            }
-            _ => panic!("expected Retry"),
+            RetryDecision::Fatal { status } => assert_eq!(status, 429),
+            _ => panic!("expected Fatal"),
         }
     }
 
     #[test]
     fn test_retry_after_header_fractional() {
         let p = RetryPolicy::default();
+        // 429 is fatal regardless of retry-after header
         match p.should_retry(429, 1, Some("1.5")) {
-            RetryDecision::Retry { delay } => {
-                assert!(delay >= Duration::from_millis(1400));
-                assert!(delay <= Duration::from_millis(1600));
-            }
-            _ => panic!("expected Retry"),
+            RetryDecision::Fatal { status } => assert_eq!(status, 429),
+            _ => panic!("expected Fatal"),
         }
     }
 

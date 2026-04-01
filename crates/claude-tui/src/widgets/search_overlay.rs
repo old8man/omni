@@ -270,11 +270,12 @@ mod tests {
     }
 
     #[test]
-    fn test_enter_next_match() {
+    fn test_enter_accepts() {
         let mut overlay = SearchOverlay::new();
         overlay.open(Some("test"));
         let action = overlay.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert!(matches!(action, SearchAction::NextMatch));
+        assert!(matches!(action, SearchAction::Accept));
+        assert!(!overlay.active);
     }
 
     #[test]

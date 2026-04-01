@@ -290,9 +290,25 @@ impl BashPermissionEvaluator {
             let base = tokens[i].as_str();
             if SAFE_WRAPPER_PATTERNS.contains(&base) {
                 i += 1;
-                // Skip wrapper-specific flags.
+                // Skip wrapper-specific flags and their values.
                 while i < tokens.len() && tokens[i].starts_with('-') {
+                    let flag = tokens[i].as_str();
                     i += 1;
+                    // Short flags like -n that take a separate value argument
+                    if !flag.contains('=')
+                        && flag.len() == 2
+                        && i < tokens.len()
+                        && !tokens[i].starts_with('-')
+                    {
+                        // Check if next token looks like a flag value (number or path)
+                        // rather than a command name
+                        let next = &tokens[i];
+                        if next.chars().all(|c| c.is_ascii_digit() || c == '.')
+                            || next.starts_with('/')
+                        {
+                            i += 1;
+                        }
+                    }
                 }
             } else {
                 break;
