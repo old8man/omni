@@ -93,8 +93,15 @@ impl LoginDialog {
     pub fn handle_key(&mut self, code: KeyCode) -> LoginDialogAction {
         match &self.phase {
             LoginPhase::ChooseMethod => self.handle_choose_method(code),
-            LoginPhase::OAuthWaiting { .. } => match code {
+            LoginPhase::OAuthWaiting { url } => match code {
                 KeyCode::Esc => LoginDialogAction::Close,
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    // Copy URL to clipboard
+                    if let Some(u) = url {
+                        crate::mouse::copy_to_clipboard(u);
+                    }
+                    LoginDialogAction::Consumed
+                }
                 _ => LoginDialogAction::Consumed,
             },
             LoginPhase::ApiKeyInput => self.handle_api_key_input(code),
@@ -210,11 +217,19 @@ impl LoginDialog {
     }
 
     /// Compute the dialog height for the current phase.
-    fn dialog_height(&self) -> u16 {
+    fn dialog_height(&self, dialog_width: u16) -> u16 {
         match &self.phase {
             LoginPhase::ChooseMethod => 14,
             LoginPhase::OAuthWaiting { url } => {
-                if url.is_some() { 12 } else { 10 }
+                if let Some(u) = url {
+                    // URL wraps across multiple lines — calculate how many
+                    let usable = dialog_width.saturating_sub(6) as usize; // 2 border + 4 padding
+                    let url_lines = if usable > 0 { (u.len() + usable - 1) / usable } else { 1 };
+                    // 1 blank + 1 "Opening..." + 1 blank + 1 "If browser..." + url_lines + 1 blank + 1 "Waiting..." + 1 blank + 1 footer
+                    (7 + url_lines as u16).max(10)
+                } else {
+                    8
+                }
             }
             LoginPhase::ApiKeyInput => 12,
             LoginPhase::Success(_) => 10,
@@ -225,8 +240,14 @@ impl LoginDialog {
 
 impl Widget for &LoginDialog {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let dialog_width = 50u16.min(area.width.saturating_sub(4));
-        let dialog_height = self.dialog_height().min(area.height.saturating_sub(2));
+        // Use most of the terminal width for the OAuth URL phase
+        let dialog_width = match &self.phase {
+            LoginPhase::OAuthWaiting { url: Some(_) } => {
+                area.width.saturating_sub(4).min(120)
+            }
+            _ => 54u16.min(area.width.saturating_sub(4)),
+        };
+        let dialog_height = self.dialog_height(dialog_width).min(area.height.saturating_sub(2));
         let dialog_x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
         let dialog_y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
         let dialog_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
@@ -351,6 +372,9 @@ fn render_choose_method(area: Rect, buf: &mut Buffer, selected: usize) {
 
 fn render_oauth_waiting(area: Rect, buf: &mut Buffer, spinner_frame: usize, url: Option<&str>) {
     let frame = SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()];
+    let url_style = Style::new()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::UNDERLINED);
 
     let mut row: u16 = 0;
     let mut put = |line: Line<'_>| {
@@ -369,22 +393,23 @@ fn render_oauth_waiting(area: Rect, buf: &mut Buffer, spinner_frame: usize, url:
 
     if let Some(u) = url {
         put(Line::from(Span::styled(
-            "  If the browser doesn't open, visit:",
+            "  If the browser doesn't open, copy this URL:",
             theme::STYLE_DARK_GRAY,
         )));
-        // Truncate URL to fit dialog width
-        let max_url_len = area.width.saturating_sub(4) as usize;
-        let display_url = if u.len() > max_url_len {
-            format!("  {}...", &u[..max_url_len.saturating_sub(3)])
+
+        // Wrap URL across multiple lines so the user can select & copy it
+        let usable_width = area.width.saturating_sub(6) as usize; // 2 padding each side + 2 border
+        if usable_width > 0 {
+            let mut remaining: &str = u;
+            while !remaining.is_empty() {
+                let chunk_len = remaining.len().min(usable_width);
+                let chunk = &remaining[..chunk_len];
+                put(Line::from(Span::styled(format!("  {chunk}"), url_style)));
+                remaining = &remaining[chunk_len..];
+            }
         } else {
-            format!("  {u}")
-        };
-        put(Line::from(Span::styled(
-            display_url,
-            Style::new()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::UNDERLINED),
-        )));
+            put(Line::from(Span::styled(format!("  {u}"), url_style)));
+        }
         put(Line::from(""));
     }
 
@@ -395,7 +420,9 @@ fn render_oauth_waiting(area: Rect, buf: &mut Buffer, spinner_frame: usize, url:
     put(Line::from(""));
     put(Line::from(vec![
         Span::styled("  [Esc]", theme::STYLE_BOLD_CYAN),
-        Span::styled(" Cancel", theme::STYLE_DARK_GRAY),
+        Span::styled(" Cancel  ", theme::STYLE_DARK_GRAY),
+        Span::styled("[C]", theme::STYLE_BOLD_CYAN),
+        Span::styled(" Copy URL", theme::STYLE_DARK_GRAY),
     ]));
 }
 

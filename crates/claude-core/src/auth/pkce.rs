@@ -42,16 +42,35 @@ struct TokenExchangeResponse {
 #[derive(Debug, Clone)]
 pub struct OAuthLoginResult {
     pub tokens: OAuthStoredTokens,
+    /// The manual fallback URL (for display in TUI when browser doesn't open).
+    pub manual_url: String,
 }
 
-/// Run the full PKCE OAuth login flow:
+/// Prepared OAuth flow — URL is available immediately, completion is awaited separately.
+pub struct PreparedOAuthFlow {
+    /// The fallback URL the user can open manually (displayed in the TUI dialog).
+    pub manual_url: String,
+    /// Await this to get the final `OAuthLoginResult`.
+    waiter: std::pin::Pin<Box<dyn std::future::Future<Output = Result<OAuthLoginResult>> + Send>>,
+}
+
+impl PreparedOAuthFlow {
+    /// Block (async) until the OAuth callback arrives and tokens are exchanged.
+    pub async fn wait(self) -> Result<OAuthLoginResult> {
+        self.waiter.await
+    }
+}
+
+/// Prepare the PKCE OAuth login flow:
 /// 1. Generate PKCE verifier + challenge + state
 /// 2. Start a localhost HTTP server to receive the callback
 /// 3. Open the browser to the authorization URL
-/// 4. Wait for the authorization code
-/// 5. Exchange the code for tokens
-/// 6. Return the tokens
-pub async fn run_oauth_login(login_with_claude_ai: bool) -> Result<OAuthLoginResult> {
+/// 4. Return immediately with the manual URL and a future to await.
+///
+/// The returned `PreparedOAuthFlow` exposes `manual_url` so the TUI can
+/// display it inside the dialog (no terminal output).  Call `.wait()` to
+/// block until the browser callback arrives.
+pub async fn prepare_oauth_login(login_with_claude_ai: bool) -> Result<PreparedOAuthFlow> {
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
     let state = generate_state();
@@ -68,31 +87,38 @@ pub async fn run_oauth_login(login_with_claude_ai: bool) -> Result<OAuthLoginRes
     let manual_url =
         oauth_config::build_auth_url(&code_challenge, &state, port, true, login_with_claude_ai);
 
-    // Print instructions
-    eprintln!();
-    eprintln!("  Opening browser to log in...");
-    eprintln!();
-    eprintln!("  If the browser doesn't open, visit this URL manually:");
-    eprintln!("  {}", manual_url);
-    eprintln!();
-
-    // Try to open browser (non-blocking, ignore errors)
+    // Try to open browser (non-blocking, ignore errors).
     let _ = open_browser(&automatic_url);
 
-    // Wait for the OAuth callback with a 5-minute timeout
-    let auth_code = wait_for_callback(listener, &state).await?;
+    let manual_url_clone = manual_url.clone();
+    let waiter = Box::pin(async move {
+        // Wait for the OAuth callback with a 5-minute timeout
+        let auth_code = wait_for_callback(listener, &state).await?;
 
-    // Exchange authorization code for tokens
-    let tokens = exchange_code_for_tokens(
-        &auth_code,
-        &state,
-        &code_verifier,
-        port,
-        false, // automatic flow used localhost redirect
-    )
-    .await?;
+        // Exchange authorization code for tokens
+        let tokens = exchange_code_for_tokens(
+            &auth_code,
+            &state,
+            &code_verifier,
+            port,
+            false,
+        )
+        .await?;
 
-    Ok(OAuthLoginResult { tokens })
+        Ok(OAuthLoginResult {
+            tokens,
+            manual_url: manual_url_clone,
+        })
+    });
+
+    Ok(PreparedOAuthFlow { manual_url, waiter })
+}
+
+/// Run the full PKCE OAuth login flow (convenience wrapper around
+/// [`prepare_oauth_login`]).
+pub async fn run_oauth_login(login_with_claude_ai: bool) -> Result<OAuthLoginResult> {
+    let flow = prepare_oauth_login(login_with_claude_ai).await?;
+    flow.wait().await
 }
 
 /// Start a minimal HTTP server that waits for a single OAuth callback request.

@@ -55,6 +55,8 @@ pub enum AppEvent {
     ContinueTurn,
     /// Result of a background `engine.run_turn()` call.
     TurnComplete(Result<TurnResult, anyhow::Error>),
+    /// The manual OAuth URL is available — update the dialog.
+    LoginOAuthUrl(String),
     /// Result of a background OAuth login attempt.
     LoginOAuthResult(Result<String, String>),
     /// Result of an API key validation/save attempt.
@@ -544,10 +546,28 @@ impl App {
                                 self.login_dialog = None;
                             }
                             LoginDialogAction::StartOAuth => {
-                                // Spawn async OAuth task
+                                // Phase 1: prepare OAuth (get URL + start listener) synchronously-ish
                                 let tx_login = tx.clone();
                                 tokio::spawn(async move {
-                                    match claude_core::auth::pkce::run_oauth_login(true).await {
+                                    // prepare_oauth_login returns immediately with the URL
+                                    // and a future to await for the callback.
+                                    let flow = match claude_core::auth::pkce::prepare_oauth_login(true).await {
+                                        Ok(f) => f,
+                                        Err(e) => {
+                                            let _ = tx_login
+                                                .send(AppEvent::LoginOAuthResult(Err(e.to_string())))
+                                                .await;
+                                            return;
+                                        }
+                                    };
+
+                                    // Send the manual URL back to the dialog immediately
+                                    let _ = tx_login
+                                        .send(AppEvent::LoginOAuthUrl(flow.manual_url.clone()))
+                                        .await;
+
+                                    // Phase 2: wait for browser callback + token exchange
+                                    match flow.wait().await {
                                         Ok(result) => {
                                             // Store tokens in the legacy location
                                             if let Err(e) = claude_core::auth::storage::store_tokens(&result.tokens).await {
@@ -1799,6 +1819,12 @@ impl App {
                                 severity: SystemSeverity::Error,
                             });
                         }
+                    }
+                }
+                AppEvent::LoginOAuthUrl(url) => {
+                    // Update the dialog to show the URL (arrives before the callback)
+                    if let Some(ref mut dialog) = self.login_dialog {
+                        dialog.set_oauth_waiting(Some(url));
                     }
                 }
                 AppEvent::LoginOAuthResult(result) => {
