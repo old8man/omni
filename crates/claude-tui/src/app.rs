@@ -1586,7 +1586,10 @@ impl App {
             if permission_dialog.is_none() && !search_overlay.active {
                 let cursor_pos = prompt.cursor_pos();
                 let prompt_prefix_len: u16 = 2; // "> "
-                let cursor_x = layout.input.x + prompt_prefix_len + cursor_pos.col as u16;
+                // Convert byte offset to display column width (handles UTF-8 properly)
+                let text_before_cursor = &prompt.lines()[cursor_pos.row][..cursor_pos.col];
+                let display_col = crate::unicode_width::display_width(text_before_cursor) as u16;
+                let cursor_x = layout.input.x + prompt_prefix_len + display_col;
                 // +1 for the top border of the input block
                 let cursor_y = layout.input.y + 1 + cursor_pos.row as u16;
                 if cursor_x < layout.input.x + layout.input.width
