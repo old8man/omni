@@ -165,7 +165,7 @@ pub async fn write_file_for_sync(path: &Path, content: &str) -> Result<bool> {
 pub fn compute_checksum(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 // ── Entry building ─────────────────────────────────────────────────────────

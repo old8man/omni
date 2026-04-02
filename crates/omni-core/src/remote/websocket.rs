@@ -197,7 +197,7 @@ async fn run_websocket_loop(
                 msg = ws_read.next() => {
                     match msg {
                         Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                            match serde_json::from_str::<Value>(&text) {
+                            match serde_json::from_str::<Value>(text.as_str()) {
                                 Ok(value) => {
                                     if value.is_object() && value.get("type").and_then(|t| t.as_str()).is_some() {
                                         callbacks.on_message(value);
@@ -231,7 +231,7 @@ async fn run_websocket_loop(
                 // Outgoing messages from application
                 Some(value) = send_rx.recv() => {
                     let text = serde_json::to_string(&value).unwrap_or_default();
-                    if let Err(e) = ws_write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await {
+                    if let Err(e) = ws_write.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await {
                         callbacks.on_error(&format!("WebSocket send error: {e}"));
                         break;
                     }
@@ -239,7 +239,7 @@ async fn run_websocket_loop(
 
                 // Periodic ping
                 _ = ping_timer.tick() => {
-                    if let Err(e) = ws_write.send(tokio_tungstenite::tungstenite::Message::Ping(vec![])).await {
+                    if let Err(e) = ws_write.send(tokio_tungstenite::tungstenite::Message::Ping(bytes::Bytes::new())).await {
                         tracing::debug!("SessionsWebSocket: ping failed: {e}");
                         break;
                     }

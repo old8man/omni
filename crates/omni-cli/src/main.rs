@@ -567,6 +567,17 @@ async fn main() -> Result<()> {
     let mut app = omni_tui::app::App::new()?;
     app.set_model_name(&model_display);
     app.set_app_state(state_store.clone());
+
+    // Wire voice input if configured in settings.
+    {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let settings = omni_core::bootstrap::load_settings(&cwd);
+        if let Some(voice_cfg) = settings.voice {
+            if voice_cfg.enabled {
+                app.set_voice_config(voice_cfg);
+            }
+        }
+    }
     let perm_mode = state_store.read().permission_mode.clone();
     app.run_with_engine(query_engine, tools, cancel, perm_mode).await?;
 

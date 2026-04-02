@@ -61,6 +61,8 @@ pub enum AppEvent {
     LoginOAuthResult(Result<String, String>),
     /// Result of an API key validation/save attempt.
     LoginApiKeyResult(Result<String, String>),
+    /// STT transcription result — insert text into the prompt.
+    VoiceTranscript(String),
 }
 
 /// Pending tool that needs permission before execution.
@@ -156,6 +158,12 @@ pub struct App {
     pub(crate) active_profile_name: Option<String>,
     /// Set to true after a clean shutdown so the Drop impl skips the second restore.
     pub(crate) cleaned_up: bool,
+    /// Voice manager for speech-to-text (None if voice not configured).
+    pub(crate) voice_manager: Option<std::sync::Arc<omni_core::voice::VoiceManager>>,
+    /// Active audio capture guard (Some while recording, drop to stop capture).
+    pub(crate) voice_capture: Option<crate::audio_capture::AudioCapture>,
+    /// Whether voice recording is currently active.
+    pub(crate) voice_recording: bool,
 }
 
 impl App {
@@ -253,6 +261,9 @@ impl App {
             active_profile_name: omni_core::auth::profiles::get_active_profile()
                 .map(|p| p.display_name()),
             cleaned_up: false,
+            voice_manager: None,
+            voice_capture: None,
+            voice_recording: false,
         })
     }
 
@@ -261,9 +272,93 @@ impl App {
         self.model_name = name.to_string();
     }
 
+    /// Configure voice input from a VoiceConfig.
+    pub fn set_voice_config(&mut self, config: omni_core::voice::VoiceConfig) {
+        use std::sync::Arc;
+        use omni_core::voice::{SttProviderKind, VoiceManager, VoskSttProvider};
+        let provider: Arc<dyn omni_core::voice::SttProvider> = match config.provider {
+            SttProviderKind::Vosk => {
+                let path = config.vosk_model_path.clone().unwrap_or_default();
+                Arc::new(VoskSttProvider::new(path))
+            }
+            SttProviderKind::SherpaOnnx => {
+                #[cfg(feature = "voice-sherpa")]
+                {
+                    let path = config.sherpa_model_path.clone().unwrap_or_default();
+                    Arc::new(omni_core::voice::SherpaOnnxSttProvider::new(path, "ru"))
+                }
+                #[cfg(not(feature = "voice-sherpa"))]
+                {
+                    tracing::warn!("SherpaOnnx selected but voice-sherpa feature not compiled; falling back to Vosk");
+                    let path = config.vosk_model_path.clone().unwrap_or_default();
+                    Arc::new(VoskSttProvider::new(path))
+                }
+            }
+        };
+        self.voice_manager = Some(Arc::new(VoiceManager::new(config, provider)));
+    }
+
     /// Attach shared application state for live cost display.
     pub fn set_app_state(&mut self, state: omni_core::state::AppStateStore) {
         self.app_state = Some(state);
+    }
+
+    /// Toggle voice recording on/off. Pass the app-event sender so the
+    /// final transcript can be delivered asynchronously.
+    pub(crate) async fn toggle_voice(&mut self, tx: &mpsc::Sender<AppEvent>) {
+        use crate::widgets::status_bar::FlashMessage;
+
+        if self.voice_recording {
+            // ── Stop recording ──────────────────────────────────────────
+            self.voice_capture = None; // drops AudioCapture → stops cpal stream
+            self.voice_recording = false;
+
+            if let Some(ref vm) = self.voice_manager {
+                let vm = std::sync::Arc::clone(vm);
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    match vm.stop_recording().await {
+                        Ok(result) if !result.text.is_empty() => {
+                            let _ = tx.send(AppEvent::VoiceTranscript(result.text)).await;
+                        }
+                        Ok(_) => {} // empty transcript
+                        Err(e) => tracing::warn!("voice stop_recording error: {e}"),
+                    }
+                });
+            }
+        } else {
+            // ── Start recording ─────────────────────────────────────────
+            let Some(ref vm) = self.voice_manager else {
+                self.flash(FlashMessage::warning(
+                    "Voice not configured. Add [voice] to settings.toml",
+                ));
+                return;
+            };
+            if !vm.is_available() {
+                self.flash(FlashMessage::warning(
+                    "Voice model not found. Check vosk_model_path in settings.",
+                ));
+                return;
+            }
+            match vm.start_recording().await {
+                Ok(audio_tx) => {
+                    match crate::audio_capture::start_capture(audio_tx) {
+                        Ok(capture) => {
+                            self.voice_capture = Some(capture);
+                            self.voice_recording = true;
+                            self.flash(FlashMessage::info("Recording... (F9 to stop)"));
+                        }
+                        Err(e) => {
+                            let _ = vm.cancel_recording().await;
+                            self.flash(FlashMessage::error(format!("Audio capture failed: {e}")));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.flash(FlashMessage::error(format!("Voice start failed: {e}")));
+                }
+            }
+        }
     }
 
     /// Original standalone run loop (no engine). Kept for backwards compatibility.
@@ -321,10 +416,20 @@ impl App {
                 match event {
                     AppEvent::Tick => self.render()?,
                     AppEvent::SpinnerTick => self.spinner.advance(),
-                    AppEvent::Key(k) => self.handle_key_standalone(k),
+                    AppEvent::Key(k) => {
+                        // F9 toggles voice recording
+                        if k.code == KeyCode::F(9) && k.modifiers == KeyModifiers::NONE {
+                            self.toggle_voice(&tx).await;
+                        } else {
+                            self.handle_key_standalone(k);
+                        }
+                    }
                     AppEvent::Mouse(m) => self.handle_mouse(m),
                     AppEvent::Resize(_, _) => self.render()?,
                     AppEvent::Quit => self.should_quit = true,
+                    AppEvent::VoiceTranscript(text) => {
+                        self.prompt.insert_paste(&text);
+                    }
                     _ => {}
                 }
             }
@@ -472,7 +577,16 @@ impl App {
                 AppEvent::Quit => {
                     self.should_quit = true;
                 }
+                AppEvent::VoiceTranscript(text) => {
+                    self.prompt.insert_paste(&text);
+                }
                 AppEvent::Key(k) => {
+                    // F9 toggles voice recording (checked before any overlay)
+                    if k.code == KeyCode::F(9) && k.modifiers == KeyModifiers::NONE {
+                        self.toggle_voice(&tx).await;
+                        continue;
+                    }
+
                     // --- Config panel overlay intercepts all keys ---
                     if self.config_panel.is_some() {
                         use crate::widgets::config_panel::ConfigPanelAction;

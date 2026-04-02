@@ -179,7 +179,7 @@ impl Default for SyncState {
 pub fn hash_content(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 // ── Team memory key validation ─────────────────────────────────────────────

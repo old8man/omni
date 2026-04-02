@@ -1,4 +1,5 @@
 pub mod app;
+pub mod audio_capture;
 pub mod input;
 pub mod keybindings;
 pub mod layout;

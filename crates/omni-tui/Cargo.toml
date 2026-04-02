@@ -22,7 +22,10 @@ unicode-segmentation = "1"
 htmlescape = "0.3"
 copypasta = { version = "0.10", default-features = false, features = ["wayland", "x11"] }
 tempfile = "3"
+cpal = "0.17"
 
+[features]
+voice-sherpa = ["omni-core/voice-sherpa"]
 
 [dev-dependencies]
 tempfile = "3"

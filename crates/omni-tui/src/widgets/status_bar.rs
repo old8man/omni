@@ -94,6 +94,8 @@ pub struct StatusBarState {
     pub flash: Option<FlashMessage>,
     /// Active profile display name shown in the status bar, e.g. "user@gmail.com (Pro)".
     pub profile_name: Option<String>,
+    /// Whether voice recording is active.
+    pub voice_recording: bool,
 }
 
 impl Default for StatusBarState {
@@ -110,6 +112,7 @@ impl Default for StatusBarState {
             rate_limited: false,
             flash: None,
             profile_name: None,
+            voice_recording: false,
         }
     }
 }
@@ -229,6 +232,18 @@ impl<'a> Widget for StatusBarWidget<'a> {
             right_spans.push(Span::styled(
                 format!("session: {}", name),
                 bg_style(Color::DarkGray),
+            ));
+        }
+
+        // Voice recording indicator
+        if self.state.voice_recording {
+            right_spans.push(sep.clone());
+            right_spans.push(Span::styled(
+                "\u{25CF} REC", // ● REC
+                Style::default()
+                    .fg(Color::Red)
+                    .bg(theme::STATUS_BG)
+                    .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
             ));
         }
 

@@ -1,7 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// Which STT provider to use for voice input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SttProviderKind {
+    #[default]
+    Vosk,
+    SherpaOnnx,
+}
+
 /// Configuration for voice input.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VoiceConfig {
     pub enabled: bool,
     #[serde(default = "default_sample_rate")]
@@ -12,6 +21,12 @@ pub struct VoiceConfig {
     pub silence_duration_secs: f32,
     #[serde(default = "default_silence_threshold")]
     pub silence_threshold_pct: f32,
+    #[serde(default)]
+    pub provider: SttProviderKind,
+    /// Path to the Vosk model directory (e.g. /path/to/vosk-model-ru)
+    pub vosk_model_path: Option<String>,
+    /// Path to the Sherpa-ONNX model directory
+    pub sherpa_model_path: Option<String>,
 }
 
 fn default_sample_rate() -> u32 {
@@ -35,6 +50,9 @@ impl Default for VoiceConfig {
             channels: 1,
             silence_duration_secs: 2.0,
             silence_threshold_pct: 3.0,
+            provider: SttProviderKind::default(),
+            vosk_model_path: None,
+            sherpa_model_path: None,
         }
     }
 }

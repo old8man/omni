@@ -548,7 +548,7 @@ impl WebSocketTransport {
                 }
                 match msg_result {
                     Ok(tungstenite::Message::Text(text)) => {
-                        match serde_json::from_str::<JsonRpcMessage>(&text) {
+                        match serde_json::from_str::<JsonRpcMessage>(text.as_str()) {
                             Ok(msg) => {
                                 if tx.send(msg).await.is_err() {
                                     break;
@@ -590,7 +590,7 @@ impl McpTransport for WebSocketTransport {
         }
         let mut write = self.write.lock().await;
         write
-            .send(tungstenite::Message::Text(message.to_string()))
+            .send(tungstenite::Message::Text(message.to_string().into()))
             .await
             .context("failed to send WebSocket message")?;
         Ok(())

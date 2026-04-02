@@ -257,6 +257,11 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_shell: Option<String>,
 
+    // ── Voice ─────────────────────────────────────────────────────────
+    /// Voice input (speech-to-text) configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<crate::voice::VoiceConfig>,
+
     // ── UI ────────────────────────────────────────────────────────────
     /// Status line display configuration.
     #[serde(skip_serializing_if = "Option::is_none")]

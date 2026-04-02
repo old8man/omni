@@ -367,6 +367,7 @@ impl App {
                 rate_limited: false,
                 flash: state_flash.clone(),
                 profile_name: active_profile_name.clone(),
+                voice_recording: self.voice_recording,
             };
             let status_widget = StatusBarWidget::new(&status_state);
             frame.render_widget(status_widget, layout.status_bar);
