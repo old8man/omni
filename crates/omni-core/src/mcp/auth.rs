@@ -239,9 +239,7 @@ impl PkceChallenge {
     /// Generate a new random PKCE challenge using S256.
     pub fn generate() -> Self {
         use base64::Engine;
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let verifier_bytes: Vec<u8> = (0..32).map(|_| rand::random()).collect();
         let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&verifier_bytes);
 
         let digest = Sha256::digest(verifier.as_bytes());

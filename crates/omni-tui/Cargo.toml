@@ -25,6 +25,7 @@ tempfile = "3"
 cpal = "0.17"
 
 [features]
+voice-vosk = ["omni-core/voice-vosk"]
 voice-sherpa = ["omni-core/voice-sherpa"]
 
 [dev-dependencies]

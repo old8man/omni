@@ -117,7 +117,7 @@ impl RetryPolicy {
         // Add up to 25% jitter (matching TS implementation).
         let jitter_max_ms = (capped.as_millis() as f64 * 0.25) as u64;
         let jitter_ms = if jitter_max_ms > 0 {
-            rand::thread_rng().gen_range(0..=jitter_max_ms)
+            rand::rng().random_range(0..=jitter_max_ms)
         } else {
             0
         };
