@@ -495,7 +495,6 @@ pub const ENTRYPOINT_NAME: &str = "MEMORY.md";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::content::ContentBlock;
     use crate::types::message::{ApiMessage, AssistantMessage, Role, UserMessage};
     use crate::types::usage::Usage;
     use uuid::Uuid;

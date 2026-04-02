@@ -351,6 +351,8 @@ mod tests {
             session_name: Some("my-project".to_string()),
             rate_limited: false,
             flash: None,
+            profile_name: None,
+            voice_recording: false,
         };
         let widget = StatusBarWidget::new(&state);
         let area = Rect::new(0, 0, 120, 1);

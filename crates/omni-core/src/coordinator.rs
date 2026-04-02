@@ -133,10 +133,11 @@ pub fn match_session_mode(
     }
 
     // Flip the env var -- is_coordinator_mode() reads it live
+    // SAFETY: single-threaded at this point (startup init before spawning tasks)
     if session_is_coordinator {
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
     } else {
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     if session_is_coordinator {
@@ -460,16 +461,16 @@ mod tests {
     fn test_coordinator_mode_disabled_without_flag() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(false);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
         assert!(!is_coordinator_mode(&gates));
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     #[test]
     fn test_coordinator_mode_disabled_without_env() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
         assert!(!is_coordinator_mode(&gates));
     }
 
@@ -477,9 +478,9 @@ mod tests {
     fn test_coordinator_mode_enabled() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
         assert!(is_coordinator_mode(&gates));
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     // -- Session mode matching --
@@ -495,8 +496,8 @@ mod tests {
     fn test_match_session_mode_same() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
         // Current is normal, session is normal -- no switch
         let result = match_session_mode(Some(SessionMode::Normal), &gates);
         assert!(result.is_none());
@@ -506,7 +507,7 @@ mod tests {
     fn test_match_session_mode_switch_to_coordinator() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
         let result = match_session_mode(Some(SessionMode::Coordinator), &gates);
         assert!(result.is_some());
         assert!(result.unwrap().contains("Entered coordinator mode"));
@@ -514,14 +515,14 @@ mod tests {
             env::var("CLAUDE_CODE_COORDINATOR_MODE").ok(),
             Some("1".to_string())
         );
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     #[test]
     fn test_match_session_mode_switch_to_normal() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
         let result = match_session_mode(Some(SessionMode::Normal), &gates);
         assert!(result.is_some());
         assert!(result.unwrap().contains("Exited coordinator mode"));
@@ -533,19 +534,19 @@ mod tests {
     #[test]
     fn test_get_worker_tool_names_simple_mode() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::set_var("CLAUDE_CODE_SIMPLE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_SIMPLE", "1") };
         let tools = get_worker_tool_names();
         assert_eq!(tools.len(), 3);
         assert!(tools.contains(&BASH_TOOL_NAME.to_string()));
         assert!(tools.contains(&FILE_READ_TOOL_NAME.to_string()));
         assert!(tools.contains(&FILE_EDIT_TOOL_NAME.to_string()));
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
     }
 
     #[test]
     fn test_get_worker_tool_names_full_mode() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
         let tools = get_worker_tool_names();
         let internal = internal_worker_tools();
         for tool in &tools {
@@ -561,7 +562,7 @@ mod tests {
     #[test]
     fn test_filter_tools_for_worker() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
         let all_tools = vec![
             BASH_TOOL_NAME.to_string(),
             FILE_READ_TOOL_NAME.to_string(),
@@ -583,7 +584,7 @@ mod tests {
     fn test_coordinator_context_empty_when_not_coordinator() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
         let ctx = get_coordinator_user_context(&gates, &[], None, false);
         assert!(ctx.is_empty());
     }
@@ -592,8 +593,8 @@ mod tests {
     fn test_coordinator_context_includes_tools() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
 
         let ctx = get_coordinator_user_context(&gates, &[], None, false);
         assert!(ctx.contains_key("workerToolsContext"));
@@ -601,14 +602,14 @@ mod tests {
         assert!(content.contains("Workers spawned via the Agent tool"));
         assert!(content.contains("Bash"));
 
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     #[test]
     fn test_coordinator_context_with_mcp_servers() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
 
         let mcp_clients = vec![
             McpClientInfo {
@@ -625,14 +626,14 @@ mod tests {
         assert!(content.contains("github"));
         assert!(content.contains("jira"));
 
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     #[test]
     fn test_coordinator_context_with_scratchpad() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
 
         let ctx =
             get_coordinator_user_context(&gates, &[], Some("/tmp/scratchpad"), true);
@@ -640,14 +641,14 @@ mod tests {
         assert!(content.contains("Scratchpad directory: /tmp/scratchpad"));
         assert!(content.contains("without permission prompts"));
 
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     #[test]
     fn test_coordinator_context_scratchpad_gate_disabled() {
         let _guard = ENV_LOCK.lock().unwrap();
         let gates = gates_with_coordinator(true);
-        env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_COORDINATOR_MODE", "1") };
 
         let ctx = get_coordinator_user_context(
             &gates,
@@ -658,7 +659,7 @@ mod tests {
         let content = &ctx["workerToolsContext"];
         assert!(!content.contains("Scratchpad"));
 
-        env::remove_var("CLAUDE_CODE_COORDINATOR_MODE");
+        unsafe { env::remove_var("CLAUDE_CODE_COORDINATOR_MODE") };
     }
 
     // -- System prompt --
@@ -666,7 +667,7 @@ mod tests {
     #[test]
     fn test_coordinator_system_prompt_full_mode() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
         let prompt = get_coordinator_system_prompt();
         assert!(prompt.contains("orchestrates software engineering tasks"));
         assert!(prompt.contains("standard tools"));
@@ -676,10 +677,10 @@ mod tests {
     #[test]
     fn test_coordinator_system_prompt_simple_mode() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::set_var("CLAUDE_CODE_SIMPLE", "1");
+        unsafe { env::set_var("CLAUDE_CODE_SIMPLE", "1") };
         let prompt = get_coordinator_system_prompt();
         assert!(prompt.contains("Bash, Read, and Edit tools"));
-        env::remove_var("CLAUDE_CODE_SIMPLE");
+        unsafe { env::remove_var("CLAUDE_CODE_SIMPLE") };
     }
 
     // -- Helper --
@@ -687,17 +688,17 @@ mod tests {
     #[test]
     fn test_is_env_truthy() {
         let _guard = ENV_LOCK.lock().unwrap();
-        env::set_var("_TEST_TRUTHY_1", "1");
+        unsafe { env::set_var("_TEST_TRUTHY_1", "1") };
         assert!(is_env_truthy("_TEST_TRUTHY_1"));
-        env::set_var("_TEST_TRUTHY_1", "true");
+        unsafe { env::set_var("_TEST_TRUTHY_1", "true") };
         assert!(is_env_truthy("_TEST_TRUTHY_1"));
-        env::set_var("_TEST_TRUTHY_1", "yes");
+        unsafe { env::set_var("_TEST_TRUTHY_1", "yes") };
         assert!(is_env_truthy("_TEST_TRUTHY_1"));
-        env::set_var("_TEST_TRUTHY_1", "0");
+        unsafe { env::set_var("_TEST_TRUTHY_1", "0") };
         assert!(!is_env_truthy("_TEST_TRUTHY_1"));
-        env::set_var("_TEST_TRUTHY_1", "false");
+        unsafe { env::set_var("_TEST_TRUTHY_1", "false") };
         assert!(!is_env_truthy("_TEST_TRUTHY_1"));
-        env::remove_var("_TEST_TRUTHY_1");
+        unsafe { env::remove_var("_TEST_TRUTHY_1") };
         assert!(!is_env_truthy("_TEST_TRUTHY_1"));
     }
 

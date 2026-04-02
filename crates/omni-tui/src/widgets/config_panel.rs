@@ -262,12 +262,12 @@ impl ConfigPanel {
     fn toggle_selected(&mut self) {
         if let Some(idx) = self.selected_real_index() {
             match &mut self.items[idx].value {
-                SettingValue::Bool(ref mut b) => {
+                SettingValue::Bool(b) => {
                     *b = !*b;
                 }
                 SettingValue::Enum {
-                    ref mut current,
-                    ref options,
+                    current,
+                    options,
                 } => {
                     if let Some(pos) = options.iter().position(|o| o == current) {
                         *current = options[(pos + 1) % options.len()].clone();
@@ -340,12 +340,12 @@ impl ConfigPanel {
                     let idx = picker.setting_index;
                     match &mut self.items[idx].value {
                         SettingValue::ManagedEnum {
-                            ref mut current, ..
+                            current, ..
                         } => {
                             *current = val;
                         }
                         SettingValue::Enum {
-                            ref mut current, ..
+                            current, ..
                         } => {
                             *current = val;
                         }

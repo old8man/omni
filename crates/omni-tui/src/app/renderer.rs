@@ -465,24 +465,24 @@ impl App {
             }
 
             // Config panel overlay (full-screen, drawn last so it covers everything)
-            if let Some(ref panel) = config_panel {
+            if let Some(panel) = config_panel {
                 let panel_height = area.height.saturating_sub(2).max(10);
                 let panel_area = crate::layout::centered_rect(85, panel_height, area);
                 frame.render_widget(panel, panel_area);
             }
 
             // Status dialog overlay (drawn on top of everything)
-            if let Some(ref sd) = status_dialog {
+            if let Some(sd) = status_dialog {
                 frame.render_widget(sd, area);
             }
 
             // Generic info dialog overlay (drawn on top of everything)
-            if let Some(ref id) = info_dialog {
+            if let Some(id) = info_dialog {
                 frame.render_widget(id, area);
             }
 
             // Picker overlay (drawn on top of everything)
-            if let Some(ref picker) = active_picker {
+            if let Some(picker) = active_picker {
                 picker.render(area, frame.buffer_mut());
             }
         })?;

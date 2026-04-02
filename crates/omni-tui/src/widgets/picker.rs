@@ -470,20 +470,20 @@ impl ActivePicker {
     /// Handle a key event, returning the action for the specific picker type.
     pub fn handle_key(&mut self, key: KeyEvent) -> PickerAction<String> {
         match self {
-            ActivePicker::Model(ref mut state) => state.handle_key(key),
-            ActivePicker::Theme(ref mut state) => state.handle_key(key),
-            ActivePicker::Session(ref mut state) => state.handle_key(key),
-            ActivePicker::Profile(ref mut state) => state.handle_key(key),
+            ActivePicker::Model(state) => state.handle_key(key),
+            ActivePicker::Theme(state) => state.handle_key(key),
+            ActivePicker::Session(state) => state.handle_key(key),
+            ActivePicker::Profile(state) => state.handle_key(key),
         }
     }
 
     /// Render the picker overlay.
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         match self {
-            ActivePicker::Model(ref state) => PickerWidget::new(state).render(area, buf),
-            ActivePicker::Theme(ref state) => PickerWidget::new(state).render(area, buf),
-            ActivePicker::Session(ref state) => PickerWidget::new(state).render(area, buf),
-            ActivePicker::Profile(ref state) => PickerWidget::new(state).render(area, buf),
+            ActivePicker::Model(state) => PickerWidget::new(state).render(area, buf),
+            ActivePicker::Theme(state) => PickerWidget::new(state).render(area, buf),
+            ActivePicker::Session(state) => PickerWidget::new(state).render(area, buf),
+            ActivePicker::Profile(state) => PickerWidget::new(state).render(area, buf),
         }
     }
 }

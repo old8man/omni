@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Policy governing how the client retries failed API requests.
 pub struct RetryPolicy {

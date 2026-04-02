@@ -20,7 +20,7 @@ impl App {
         match event {
             StreamEvent::TextDelta { text } => {
                 // Append to current assistant message, or create one
-                if let Some(MessageEntry::Assistant { text: ref mut t }) =
+                if let Some(MessageEntry::Assistant { text: t }) =
                     self.message_list.messages_mut().last_mut()
                 {
                     t.push_str(&text);
@@ -29,7 +29,7 @@ impl App {
                 }
             }
             StreamEvent::ThinkingDelta { text } => {
-                if let Some(MessageEntry::Thinking { text: ref mut t, .. }) =
+                if let Some(MessageEntry::Thinking { text: t, .. }) =
                     self.message_list.messages_mut().last_mut()
                 {
                     t.push_str(&text);

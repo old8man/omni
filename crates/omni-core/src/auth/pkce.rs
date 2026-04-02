@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 /// Generate a 43-character base64url-encoded code verifier (32 random bytes)

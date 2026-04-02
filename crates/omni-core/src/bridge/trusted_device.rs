@@ -205,15 +205,15 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let original = std::env::var("CLAUDE_TRUSTED_DEVICE_TOKEN").ok();
 
-        std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "test-token-abcdefghijklmnop");
+        unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "test-token-abcdefghijklmnop") };
         clear_trusted_device_token_cache();
 
         let token = get_trusted_device_token();
         assert_eq!(token, Some("test-token-abcdefghijklmnop".to_string()));
 
         match original {
-            Some(val) => std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val),
-            None => std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN"),
+            Some(val) => unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val) },
+            None => unsafe { std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN") },
         }
         clear_trusted_device_token_cache();
     }
@@ -223,15 +223,15 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let original = std::env::var("CLAUDE_TRUSTED_DEVICE_TOKEN").ok();
 
-        std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "");
+        unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "") };
         clear_trusted_device_token_cache();
 
         // Empty env var should fall through to disk read
         let _token = get_trusted_device_token();
 
         match original {
-            Some(val) => std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val),
-            None => std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN"),
+            Some(val) => unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val) },
+            None => unsafe { std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN") },
         }
         clear_trusted_device_token_cache();
     }
@@ -248,7 +248,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let original = std::env::var("CLAUDE_TRUSTED_DEVICE_TOKEN").ok();
 
-        std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "test-header-token-abcdef123");
+        unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", "test-header-token-abcdef123") };
         clear_trusted_device_token_cache();
 
         let header = trusted_device_header();
@@ -258,8 +258,8 @@ mod tests {
         assert_eq!(value, "test-header-token-abcdef123");
 
         match original {
-            Some(val) => std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val),
-            None => std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN"),
+            Some(val) => unsafe { std::env::set_var("CLAUDE_TRUSTED_DEVICE_TOKEN", val) },
+            None => unsafe { std::env::remove_var("CLAUDE_TRUSTED_DEVICE_TOKEN") },
         }
         clear_trusted_device_token_cache();
     }

@@ -302,7 +302,7 @@ mod tests {
         PermissionBehavior, PermissionRuleSource, PermissionRuleValue,
     };
 
-    fn make_rule(
+    fn _make_rule(
         tool: &str,
         content: Option<&str>,
         behavior: PermissionBehavior,

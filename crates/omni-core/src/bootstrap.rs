@@ -488,9 +488,9 @@ mod tests {
 
     #[test]
     fn test_apply_env_overrides_model() {
-        std::env::set_var("CLAUDE_MODEL", "env-model");
+        unsafe { std::env::set_var("CLAUDE_MODEL", "env-model") };
         let settings = apply_env_overrides(Settings::default());
         assert_eq!(settings.model, Some("env-model".to_string()));
-        std::env::remove_var("CLAUDE_MODEL");
+        unsafe { std::env::remove_var("CLAUDE_MODEL") };
     }
 }

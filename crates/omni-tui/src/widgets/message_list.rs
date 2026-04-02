@@ -304,8 +304,8 @@ impl MessageList {
     pub fn update_tool_status(&mut self, id: &str, status: ToolUseStatus) -> bool {
         for msg in self.messages.iter_mut().rev() {
             if let MessageEntry::ToolUse {
-                id: ref tool_id,
-                status: ref mut s,
+                id: tool_id,
+                status: s,
                 ..
             } = msg
             {
